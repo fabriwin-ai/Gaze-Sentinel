@@ -12,7 +12,7 @@ let targetX = gx
 let targetY = gy
 let confidence = 60
 
-// === IR EXPOSURE + TRACE RECORDING + 6-LAYER DEEP NEURAL MNIST RETICLE ===
+// === 8-LAYER DEEP NEURAL RETICLE + 4 VISUAL THEMES ===
 let showCover = true
 const PRODUCT = "SENSE"
 const TAGLINE = "VALUABLE PROFIT PROJECT"
@@ -23,6 +23,14 @@ const PROFILES = {
   ray1: { name: 'RAY-1 BLASTER',   motionTh: 68,  minCount: 13, alphaBase: 0.39, alphaMaxAdd: 0.61 },
   ray2: { name: 'RAY-2 PHASER',    motionTh: 89,  minCount: 18, alphaBase: 0.31, alphaMaxAdd: 0.54 },
   ray3: { name: 'RAY-3 SNIPER',    motionTh: 115, minCount: 25, alphaBase: 0.22, alphaMaxAdd: 0.41 }
+}
+
+let currentTheme = 'balanced'
+const THEMES = {
+  minimal:     { name: '4 MINIMAL',     blurMult: 0.52, orbitCount: 24, synapse: false, pulses: 4,  color1: '#00ff9d', color2: '#ffffff' },
+  balanced:    { name: '5 BALANCED',    blurMult: 1.00, orbitCount: 42, synapse: true,  pulses: 12, color1: '#00ff9d', color2: '#00ff41' },
+  performance: { name: '6 PERFORMANCE', blurMult: 0.38, orbitCount: 26, synapse: false, pulses: 0,  color1: '#00ff9d', color2: '#00ff41' },
+  fancy:       { name: '7 FANCY',       blurMult: 1.55, orbitCount: 58, synapse: true,  pulses: 20, color1: '#ff00ff', color2: '#ffd700' }
 }
 
 let motionTh = PROFILES.ray2.motionTh
@@ -84,6 +92,12 @@ function setProfile(p) {
   alphaBase = pr.alphaBase
   alphaMaxAdd = pr.alphaMaxAdd
   log(`RAYGUN PROFILE → ${pr.name}`)
+}
+
+function setTheme(t) {
+  if (!THEMES[t]) return
+  currentTheme = t
+  log(`VISUAL THEME → ${THEMES[t].name}`)
 }
 
 function processFrame() {
@@ -205,11 +219,14 @@ function drawCover() {
 
   ctx.shadowBlur = 12; ctx.font = "19px monospace"
   ctx.fillStyle = currentProfile === 'ray1' ? "#ff00ff" : "#00ff9d"
-  ctx.fillText("1  RAY-1 BLASTER", innerWidth / 2 - 260, innerHeight / 2 + 160)
+  ctx.fillText("1  RAY-1 BLASTER", innerWidth / 2 - 280, innerHeight / 2 + 160)
   ctx.fillStyle = currentProfile === 'ray2' ? "#ff00ff" : "#00ff9d"
-  ctx.fillText("2  RAY-2 PHASER", innerWidth / 2, innerHeight / 2 + 160)
+  ctx.fillText("2  RAY-2 PHASER", innerWidth / 2 - 80, innerHeight / 2 + 160)
   ctx.fillStyle = currentProfile === 'ray3' ? "#ff00ff" : "#00ff9d"
-  ctx.fillText("3  RAY-3 SNIPER", innerWidth / 2 + 260, innerHeight / 2 + 160)
+  ctx.fillText("3  RAY-3 SNIPER", innerWidth / 2 + 120, innerHeight / 2 + 160)
+
+  ctx.fillStyle = "#00ff9d"
+  ctx.fillText("4 MINIMAL   5 BALANCED   6 PERFORMANCE   7 FANCY", innerWidth / 2, innerHeight / 2 + 200)
 
   ctx.shadowBlur = 20; ctx.shadowColor = "#ffd700"; ctx.fillStyle = "#ffd700"
   ctx.font = "bold 21px monospace"
@@ -230,6 +247,11 @@ function drawGaze() {
     return
   }
 
+  const theme = THEMES[currentTheme]
+  const t = Date.now() / 240
+  const tracePulse = isTraceRecording ? Math.sin(Date.now() / 70) * 0.4 + 1.35 : 1
+  const bm = theme.blurMult
+
   // core raygun dot
   const pulse = Math.sin(Date.now() / 140) * 5 + 16 + confidence / 8
   ctx.shadowBlur = -1
@@ -239,113 +261,70 @@ function drawGaze() {
   ctx.arc(gx, gy, pulse, 0, Math.PI * 2)
   ctx.fill()
 
-  // === 6-LAYER DEEP NEURAL MNIST RETICLE ===
-  const t = Date.now() / 260
-  const tracePulse = isTraceRecording ? Math.sin(Date.now() / 80) * 0.3 + 1.2 : 1
+  // === 8-LAYER DEEP NEURAL MNIST RETICLE ===
+  const layerRadii = [112, 99, 86, 73, 59, 46, 33, 19]
+  const layerWidths = [13, 8.5, 6.2, 4.8, 3.5, 2.9, 2.2, 4]
+  const layerBlur  = [68, 52, 39, 29, 21, 16, 12, 9]
+  const layerAlpha = [0.26, 0.55, 0.82, 0.95, 0.88, 0.72, 0.65, 1]
 
-  // Layer 1: Outer Halo Ring (slowest, widest glow)
-  ctx.shadowBlur = 52 * tracePulse
-  ctx.shadowColor = "#00ff9d"
-  ctx.strokeStyle = "rgba(0,255,157,0.35)"
-  ctx.lineWidth = 9
-  ctx.beginPath()
-  ctx.arc(gx, gy, 94, 0, Math.PI * 2)
-  ctx.stroke()
+  for (let l = 0; l < 8; l++) {
+    ctx.shadowBlur = layerBlur[l] * bm * tracePulse
+    ctx.shadowColor = (l % 2 === 0) ? theme.color1 : theme.color2
+    ctx.strokeStyle = `rgba(255,255,255,${layerAlpha[l]})`
+    ctx.lineWidth = layerWidths[l]
+    ctx.beginPath()
+    ctx.arc(gx, gy, layerRadii[l], 0, Math.PI * 2)
+    ctx.stroke()
+  }
 
-  // Layer 2: Outer Neural Orbit Ring
-  ctx.shadowBlur = 32 * tracePulse
-  ctx.shadowColor = "#00ff41"
-  ctx.strokeStyle = "#00ff41"
-  ctx.lineWidth = 5.5
-  ctx.beginPath()
-  ctx.arc(gx, gy, 79, 0, Math.PI * 2)
-  ctx.stroke()
-
-  // Layer 3: Mid Synapse Ring
-  ctx.shadowBlur = 24 * tracePulse
-  ctx.shadowColor = "#00ff9d"
-  ctx.strokeStyle = "rgba(0,255,157,0.8)"
-  ctx.lineWidth = 3.8
-  ctx.beginPath()
-  ctx.arc(gx, gy, 61, 0, Math.PI * 2)
-  ctx.stroke()
-
-  // Layer 4: Inner Neural Orbit Ring
-  ctx.shadowBlur = 19 * tracePulse
-  ctx.shadowColor = "#ffd700"
-  ctx.strokeStyle = "#ffd700"
-  ctx.lineWidth = 2.9
-  ctx.beginPath()
-  ctx.arc(gx, gy, 46, 0, Math.PI * 2)
-  ctx.stroke()
-
-  // Layer 5: Core Ring
-  ctx.shadowBlur = 14 * tracePulse
-  ctx.shadowColor = "#ff0088"
-  ctx.strokeStyle = "rgba(255,0,136,0.9)"
-  ctx.lineWidth = 2.1
-  ctx.beginPath()
-  ctx.arc(gx, gy, 29, 0, Math.PI * 2)
-  ctx.stroke()
-
-  // Layer 6: Central Core Cross (fastest)
-  ctx.shadowBlur = 11 * tracePulse
-  ctx.shadowColor = "#00ff9d"
-  ctx.strokeStyle = "#00ff9d"
-  ctx.lineWidth = 4
-  ctx.beginPath()
-  ctx.moveTo(gx - 22, gy)
-  ctx.lineTo(gx + 22, gy)
-  ctx.moveTo(gx, gy - 22)
-  ctx.lineTo(gx, gy + 22)
-  ctx.stroke()
-
-  // 46 MNIST-style orbiting neural nodes across 4 layers
-  ctx.shadowBlur = 18 * tracePulse
+  // 58 orbiting MNIST neural nodes (scaled by theme)
+  ctx.shadowBlur = 19 * bm * tracePulse
   ctx.shadowColor = "#ffffff"
   ctx.fillStyle = "#ffffff"
   ctx.font = "bold 15px monospace"
   ctx.textAlign = "center"
   ctx.textBaseline = "middle"
-  const mnistSyms = "0123456789ΦΨΔλ▒░▓█ΣΩ⊗⊕∇"
-  for (let i = 0; i < 46; i++) {
-    const layer = i % 4
-    const radius = layer === 0 ? 84 : layer === 1 ? 66 : layer === 2 ? 51 : 34
-    const speed = layer === 0 ? 0.9 : layer === 1 ? 1.6 : layer === 2 ? 2.3 : 3.1
-    const a = t * speed + i * (Math.PI / 23)
+  const mnistSyms = "0123456789ΦΨΔλ▒░▓█ΣΩ⊗⊕∇∞≈≠"
+  for (let i = 0; i < theme.orbitCount; i++) {
+    const layer = i % 8
+    const radius = layerRadii[layer] - 6
+    const speed = 0.7 + layer * 0.28
+    const a = t * speed + i * (Math.PI * 2 / theme.orbitCount)
     const x = gx + Math.cos(a) * radius
     const y = gy + Math.sin(a) * radius
     ctx.fillText(mnistSyms[i % mnistSyms.length], x, y)
   }
 
-  // Dynamic inter-layer synapse connections (real neural-net firing)
-  ctx.shadowBlur = 7 * tracePulse
-  ctx.strokeStyle = isTraceRecording ? "rgba(255,0,136,0.75)" : "rgba(0,255,157,0.55)"
-  ctx.lineWidth = 1.1
-  for (let i = 0; i < 46; i += 3) {
-    const a1 = t * 1.4 + i * (Math.PI / 23)
-    const a2 = t * 2.2 + (i + 7) * (Math.PI / 23)
-    const r1 = i % 4 === 0 ? 84 : i % 4 === 1 ? 66 : 51
-    const r2 = i % 4 === 0 ? 66 : i % 4 === 1 ? 51 : 34
-    ctx.beginPath()
-    ctx.moveTo(gx + Math.cos(a1) * r1, gy + Math.sin(a1) * r1)
-    ctx.lineTo(gx + Math.cos(a2) * r2, gy + Math.sin(a2) * r2)
-    ctx.stroke()
+  // Dynamic synapse connections (only when theme allows)
+  if (theme.synapse) {
+    ctx.shadowBlur = 8 * bm * tracePulse
+    ctx.strokeStyle = isTraceRecording ? "rgba(255,0,136,0.85)" : "rgba(0,255,157,0.6)"
+    ctx.lineWidth = 1.15
+    for (let i = 0; i < theme.orbitCount; i += 4) {
+      const a1 = t * 1.6 + i * 0.14
+      const a2 = t * 2.3 + (i + 11) * 0.14
+      const r1 = layerRadii[i % 8] - 8
+      const r2 = layerRadii[(i + 3) % 8] - 8
+      ctx.beginPath()
+      ctx.moveTo(gx + Math.cos(a1) * r1, gy + Math.sin(a1) * r1)
+      ctx.lineTo(gx + Math.cos(a2) * r2, gy + Math.sin(a2) * r2)
+      ctx.stroke()
+    }
   }
 
-  // Pulsing neuron activation nodes (extra visual depth)
-  ctx.shadowBlur = 22 * tracePulse
-  for (let i = 0; i < 12; i++) {
-    const a = t * 2.8 + i * (Math.PI / 6)
-    const pulseNode = Math.sin(t * 8 + i) * 2 + 3
-    const r = 72 - (i % 3) * 14
+  // Pulsing neuron nodes
+  ctx.shadowBlur = 24 * bm * tracePulse
+  for (let i = 0; i < theme.pulses; i++) {
+    const a = t * 3.2 + i * (Math.PI * 2 / theme.pulses)
+    const nodePulse = Math.sin(t * 9 + i) * 2.5 + 4.5
+    const r = layerRadii[i % 8] - 14
     const x = gx + Math.cos(a) * r
     const y = gy + Math.sin(a) * r
-    ctx.fillStyle = isTraceRecording ? "#ff0088" : "#00ff9d"
-    ctx.fillRect(x - pulseNode / 2, y - pulseNode / 2, pulseNode, pulseNode)
+    ctx.fillStyle = isTraceRecording ? "#ff0088" : theme.color1
+    ctx.fillRect(x - nodePulse/2, y - nodePulse/2, nodePulse, nodePulse)
   }
 
-  // Classic raygun arms (boosted for neural synergy)
+  // Classic raygun arms
   ctx.shadowBlur = -1
   ctx.shadowColor = "#00ff41"
   ctx.strokeStyle = "#00ff41"
@@ -368,7 +347,7 @@ function drawGaze() {
   // Target brackets
   ctx.strokeStyle = "#ffd700"
   ctx.lineWidth = 2.4
-  ctx.shadowBlur = 14
+  ctx.shadowBlur = 14 * bm
   ctx.shadowColor = "#ffd700"
   ctx.beginPath()
   ctx.moveTo(gx - 26, gy - 26); ctx.lineTo(gx - 14, gy - 26); ctx.lineTo(gx - 14, gy - 14)
@@ -387,7 +366,7 @@ function drawGaze() {
 
   ctx.font = "13px monospace"
   ctx.fillStyle = "#00ff9d"
-  ctx.fillText(`TH:${motionTh} MIN:${minCount}   EYE-RAY MODE`, 38, 82)
+  ctx.fillText(`TH:${motionTh} MIN:${minCount}   ${THEMES[currentTheme].name}`, 38, 82)
 
   // IR EXPOSURE + TRACE RECORDING HUD (top-right)
   ctx.textAlign = "right"
@@ -458,17 +437,25 @@ function start() {
 
   window.addEventListener('keydown', (e) => {
     if (showCover) {
-      if (e.key === ' ' || e.key === 'Enter' || e.key === '1' || e.key === '2' || e.key === '3') {
+      if (e.key === ' ' || e.key === 'Enter' || e.key >= '1' && e.key <= '7') {
         showCover = false
         log("RAYGUN EYE-POINTING ACTIVATED — TRACE RECORDING ENABLED")
       }
       if (e.key === '1') setProfile('ray1')
       if (e.key === '2') setProfile('ray2')
       if (e.key === '3') setProfile('ray3')
+      if (e.key === '4') setTheme('minimal')
+      if (e.key === '5') setTheme('balanced')
+      if (e.key === '6') setTheme('performance')
+      if (e.key === '7') setTheme('fancy')
     } else {
       if (e.key === '1') setProfile('ray1')
       if (e.key === '2') setProfile('ray2')
       if (e.key === '3') setProfile('ray3')
+      if (e.key === '4') setTheme('minimal')
+      if (e.key === '5') setTheme('balanced')
+      if (e.key === '6') setTheme('performance')
+      if (e.key === '7') setTheme('fancy')
       if (e.key === '+' || e.key === '=') { motionTh = Math.min(160, motionTh + 4); log(`TH ↑ ${motionTh}`) }
       if (e.key === '-' || e.key === '_') { motionTh = Math.max(50, motionTh - 4); log(`TH ↓ ${motionTh}`) }
     }
@@ -486,6 +473,7 @@ function start() {
   }
   drawLoop()
   setProfile('ray2')
+  setTheme('balanced')
 }
 
 start()

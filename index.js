@@ -3,17 +3,46 @@ const proc = document.getElementById("process")
 const pctx = proc.getContext("2d", { willReadFrequently: true })
 const ctx = document.getElementById("overlay").getContext("2d")
 const bgctx = document.getElementById("bg").getContext("2d")
+const BASE_FRAME_W = 80
+const BASE_FRAME_H = 60
+const BASE_FRAME_PIXELS = BASE_FRAME_W * BASE_FRAME_H
+const RESIZE_COOLDOWN_MS = 1200
+const DYNAMIC_RES_PROFILES = {
+  low: {
+    idle: { w: 64, h: 48 },
+    active: { w: 80, h: 60 }
+  },
+  mid: {
+    idle: { w: 80, h: 60 },
+    active: { w: 96, h: 72 }
+  },
+  high: {
+    idle: { w: 96, h: 72 },
+    active: { w: 112, h: 84 }
+  }
+}
 
-const frames = [new Uint8ClampedArray(4800), new Uint8ClampedArray(4800), new Uint8ClampedArray(4800)]
+let procW = BASE_FRAME_W
+let procH = BASE_FRAME_H
+let framePixels = BASE_FRAME_PIXELS
+let frames = []
+let motionPreview = null
+let motionPreviewData = null
+let enhancedGray = null
+let motionActivity = 0
+let lastResolutionAdjustAt = 0
+let runtimeDynamicResEnabled = true
+let memoryTier = "mid"
+let resolutionProfile = DYNAMIC_RES_PROFILES.mid
 let fidx = 0
-let gx = innerWidth / 2
-let gy = innerHeight / 2
+let gx = innerWidth / 1
+let gy = innerHeight / 1
 let targetX = gx
 let targetY = gy
 let confidence = 60
 
 // === 8-LAYER DEEP NEURAL RETICLE + 4 VISUAL THEMES ===
-let showCover = true
+let showCover = false
 const PRODUCT = "SENSE"
 const TAGLINE = "VALUABLE PROFIT PROJECT"
 const SUBLINE = "$ REMUNERABLE COVER"
@@ -27,10 +56,10 @@ const PROFILES = {
 
 let currentTheme = 'balanced'
 const THEMES = {
-  minimal:     { name: '4 MINIMAL',     blurMult: 0.52, orbitCount: 24, synapse: false, pulses: 4,  color1: '#00ff9d', color2: '#ffffff' },
-  balanced:    { name: '5 BALANCED',    blurMult: 1.00, orbitCount: 42, synapse: true,  pulses: 12, color1: '#00ff9d', color2: '#00ff41' },
-  performance: { name: '6 PERFORMANCE', blurMult: 0.38, orbitCount: 26, synapse: false, pulses: 0,  color1: '#00ff9d', color2: '#00ff41' },
-  fancy:       { name: '7 FANCY',       blurMult: 1.55, orbitCount: 58, synapse: true,  pulses: 20, color1: '#ff00ff', color2: '#ffd700' }
+  minimal:     { name: '4 MINIMAL',     blurMult: 0.52, orbitCount: 44, synapse: true, pulses: 4,  color1: '#00ff9d', color2: '#ffffff' },
+  balanced:    { name: '5 BALANCED',    blurMult: 1.00, orbitCount: 22, synapse: true,  pulses: 12, color1: '#00ff9d', color2: '#00ff41' },
+  performance: { name: '6 PERFORMANCE', blurMult: 0.38, orbitCount: 66, synapse: true, pulses: 0,  color1: '#00ff9d', color2: '#00ff41' },
+  fancy:       { name: '7 FANCY',       blurMult: 1.55, orbitCount: 88, synapse: true,  pulses: 20, color1: '#ff00ff', color2: '#ffd700' }
 }
 
 let motionTh = PROFILES.ray2.motionTh
@@ -46,19 +75,99 @@ let closedFrames = 0
 let logs = []
 const drops = Array(100).fill(0).map(() => Math.random() * innerHeight)
 let lastSendAt = 0
+let lastPingAt = 0
 let clickCooldownUntil = 0
 let lastAckAt = 0
 let idleStartAt = 0
 let idleCenter = { x: gx, y: gy }
-const IDLE_RADIUS = 24
-const IDLE_LEFT_MS = 700
-const IDLE_RIGHT_MS = 1400
+let showProcessView = false
+const IDLE_RADIUS = 16
+const IDLE_LEFT_MS = 400
+const IDLE_RIGHT_MS = 700
 const IDLE_COOLDOWN_MS = 900
+const MIN_CONFIDENCE = 65
+
+function clamp(v, lo, hi) {
+  return v < lo ? lo : (v > hi ? hi : v)
+}
 
 function log(msg) {
   const t = new Date().toISOString().slice(11, 19)
   logs.push(`[${t}] ${msg}`)
   console.log(`[SENSE RAY] ${msg}`)
+}
+
+function detectMemoryTier() {
+  const deviceMemory = typeof navigator.deviceMemory === "number" ? navigator.deviceMemory : null
+  if (deviceMemory !== null) {
+    if (deviceMemory >= 8) return "high"
+    if (deviceMemory >= 4) return "mid"
+    return "low"
+  }
+  if (performance && performance.memory && performance.memory.jsHeapSizeLimit > 0) {
+    const heapLimitMb = performance.memory.jsHeapSizeLimit / (1024 * 1024)
+    if (heapLimitMb >= 2048) return "high"
+    if (heapLimitMb >= 1024) return "mid"
+    return "low"
+  }
+  return "mid"
+}
+
+function selectResolutionProfile(tier) {
+  return DYNAMIC_RES_PROFILES[tier] || DYNAMIC_RES_PROFILES.mid
+}
+
+function getHeapPressure() {
+  if (!performance || !performance.memory) return 0
+  const { usedJSHeapSize, jsHeapSizeLimit } = performance.memory
+  if (!jsHeapSizeLimit) return 0
+  return usedJSHeapSize / jsHeapSizeLimit
+}
+
+function allocateProcessingBuffers(w, h) {
+  procW = w
+  procH = h
+  framePixels = procW * procH
+  proc.width = procW
+  proc.height = procH
+  frames = [
+    new Uint8ClampedArray(framePixels),
+    new Uint8ClampedArray(framePixels),
+    new Uint8ClampedArray(framePixels)
+  ]
+  fidx = 0
+  motionPreview = pctx.createImageData(procW, procH)
+  motionPreviewData = motionPreview.data
+  enhancedGray = new Uint8ClampedArray(framePixels)
+  updateProcessPreviewVisibility()
+}
+
+function maybeAdjustProcessingResolution(count, effectiveMinCount) {
+  if (!runtimeDynamicResEnabled) return
+  const now = performance.now()
+  const motionSignal = clamp(count / Math.max(1, effectiveMinCount), 0, 2.4)
+  motionActivity = motionActivity * 0.86 + motionSignal * 0.14
+
+  let target = motionActivity >= 0.92 ? resolutionProfile.active : resolutionProfile.idle
+  const heapPressure = getHeapPressure()
+  if (heapPressure > 0.88) target = resolutionProfile.idle
+  if (heapPressure > 0.94 && memoryTier !== "low") target = DYNAMIC_RES_PROFILES.low.idle
+
+  if (target.w === procW && target.h === procH) return
+  if (now - lastResolutionAdjustAt < RESIZE_COOLDOWN_MS) return
+  lastResolutionAdjustAt = now
+  allocateProcessingBuffers(target.w, target.h)
+  log(`ADAPTIVE RES ${procW}x${procH} (${motionActivity >= 0.92 ? "MOTION" : "IDLE"})`)
+}
+
+function toggleDynamicResolution() {
+  runtimeDynamicResEnabled = !runtimeDynamicResEnabled
+  motionActivity = 0
+  if (!runtimeDynamicResEnabled) {
+    const idle = resolutionProfile.idle
+    if (idle.w !== procW || idle.h !== procH) allocateProcessingBuffers(idle.w, idle.h)
+  }
+  log(`DYNAMIC RESOLUTION ${runtimeDynamicResEnabled ? "ON" : "OFF"}`)
 }
 
 function resize() {
@@ -74,8 +183,10 @@ function resize() {
 window.addEventListener("resize", resize)
 resize()
 
-proc.width = 80
-proc.height = 60
+memoryTier = detectMemoryTier()
+resolutionProfile = selectResolutionProfile(memoryTier)
+allocateProcessingBuffers(resolutionProfile.idle.w, resolutionProfile.idle.h)
+log(`MEMORY TIER ${memoryTier.toUpperCase()} | BASE RES ${procW}x${procH}`)
 
 if (chrome && chrome.runtime && chrome.runtime.onMessage) {
   chrome.runtime.onMessage.addListener((m) => {
@@ -100,44 +211,90 @@ function setTheme(t) {
   log(`VISUAL THEME → ${THEMES[t].name}`)
 }
 
+function updateProcessPreviewVisibility() {
+  proc.style.display = showProcessView ? "block" : "none"
+  if (!showProcessView) return
+  const maxPreviewW = 280
+  const maxPreviewH = 210
+  const preferredScale = 2.5
+  const scale = Math.min(preferredScale, maxPreviewW / procW, maxPreviewH / procH)
+  const previewW = Math.max(144, Math.round(procW * scale))
+  const previewH = Math.max(108, Math.round(procH * scale))
+  proc.style.position = "fixed"
+  proc.style.right = "16px"
+  proc.style.bottom = "16px"
+  proc.style.width = `${previewW}px`
+  proc.style.height = `${previewH}px`
+  proc.style.imageRendering = "pixelated"
+  proc.style.opacity = "0.88"
+  proc.style.border = "1px solid rgba(255,255,255,0.45)"
+  proc.style.boxShadow = "0 0 16px rgba(0,0,0,0.55)"
+  proc.style.zIndex = "2147483646"
+}
+
 function processFrame() {
   if (video.videoWidth === 0 || showCover) return
-  pctx.drawImage(video, 0, 0, 80, 60)
-  const data = pctx.getImageData(0, 0, 80, 60).data
-  const gray = new Uint8ClampedArray(4800)
+  pctx.drawImage(video, 0, 0, procW, procH)
+  const data = pctx.getImageData(0, 0, procW, procH).data
   let sum = 0
+  let minGray = 255
+  let maxGray = 0
+  const pixelScale = framePixels / BASE_FRAME_PIXELS
+  const effectiveMinCount = Math.max(8, Math.round(minCount * pixelScale))
   for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-    gray[j] = (data[i] * 0.3 + data[i + 1] * 0.59 + data[i + 2] * 0.11) | 0
-    sum += gray[j]
+    const g = (data[i] * 0.3 + data[i + 1] * 0.59 + data[i + 2] * 0.11) | 0
+    enhancedGray[j] = g
+    sum += g
+    if (g < minGray) minGray = g
+    if (g > maxGray) maxGray = g
+  }
+  const contrastRange = Math.max(16, maxGray - minGray)
+  for (let i = 0; i < framePixels; i++) {
+    const n = (enhancedGray[i] - minGray) / contrastRange
+    const boosted = Math.pow(clamp(n, 0, 1), 0.82)
+    enhancedGray[i] = clamp((boosted * 255) | 0, 0, 255)
   }
   fidx = (fidx + 1) % 3
-  frames[fidx].set(gray)
+  frames[fidx].set(enhancedGray)
   let sx = 0, sy = 0, count = 0
   const p = (fidx + 2) % 3
   const pp = (fidx + 1) % 3
-  for (let i = 0; i < 4800; i++) {
+  const adaptiveMotionTh = clamp((motionTh * (0.76 + (contrastRange / 255) * 0.36)) | 0, 38, 170)
+  for (let i = 0, k = 0; i < framePixels; i++, k += 4) {
     const diff = ((frames[fidx][i] ^ frames[p][i]) | (frames[p][i] ^ frames[pp][i])) & 0xf0
-    if (diff > motionTh) {
-      sx += i % 80
-      sy += (i / 80) | 0
+    if (diff > adaptiveMotionTh) {
+      sx += i % procW
+      sy += (i / procW) | 0
       count++
+      motionPreviewData[k] = 255
+      motionPreviewData[k + 1] = 255
+      motionPreviewData[k + 2] = 255
+      motionPreviewData[k + 3] = 255
+    } else {
+      const bg = clamp((enhancedGray[i] * 0.45) | 0, 18, 180)
+      motionPreviewData[k] = bg
+      motionPreviewData[k + 1] = bg
+      motionPreviewData[k + 2] = bg
+      motionPreviewData[k + 3] = 255
     }
   }
-  if (count >= minCount) {
-    targetX = (sx / count / 80) * innerWidth
-    targetY = (sy / count / 60) * innerHeight
+  pctx.putImageData(motionPreview, 0, 0)
+  if (count >= effectiveMinCount) {
+    targetX = (sx / count / procW) * innerWidth
+    targetY = (sy / count / procH) * innerHeight
     targetX = innerWidth - targetX
     targetY = innerHeight - targetY
-    confidence = Math.min(98, 48 + count * 2.1)
+    const normalizedCount = count / Math.max(0.25, pixelScale)
+    confidence = Math.min(98, 48 + normalizedCount * 2.1)
   } else {
     confidence = Math.max(20, confidence - 6)
   }
-  if (sum / 4800 < 35) closedFrames++ 
+  if (sum / framePixels < 35) closedFrames++
   else closedFrames = 0
 
-  const avgGray = sum / 4800
+  const avgGray = sum / framePixels
   irExposure = Math.floor(Math.max(8, Math.min(98, avgGray * 1.72)))
-  isTraceRecording = (count >= minCount && confidence > 45)
+  isTraceRecording = (count >= effectiveMinCount && confidence > 45)
 
   const dx = targetX - gx
   const dy = targetY - gy
@@ -149,28 +306,33 @@ function processFrame() {
   const now = performance.now()
   const shouldClick = closedFrames > 6 && now > clickCooldownUntil
   if (shouldClick) {
-    clickCooldownUntil = now + 800
+    clickCooldownUntil = now + 16000
     closedFrames = 0
   }
+  // --- DUAL-LAYERED ANTI-FALSE POSITIVE METHOD ---
+  const isStable = confidence >= MIN_CONFIDENCE
   const dxIdle = gx - idleCenter.x
   const dyIdle = gy - idleCenter.y
   const distIdle = Math.hypot(dxIdle, dyIdle)
-  if (distIdle > IDLE_RADIUS) {
+
+  // 1. Confidence-Gated Interaction + 2. Reset on Drift/Signal Loss
+  if (distIdle > IDLE_RADIUS || !isStable) {
     idleCenter = { x: gx, y: gy }
     idleStartAt = now
   }
+
   let idleClick = null
-  if (now - idleStartAt > IDLE_RIGHT_MS && now > clickCooldownUntil) {
+  if (isStable && now - idleStartAt > IDLE_RIGHT_MS && now > clickCooldownUntil) {
     idleClick = "right"
     clickCooldownUntil = now + IDLE_COOLDOWN_MS
     idleStartAt = now
-  } else if (now - idleStartAt > IDLE_LEFT_MS && now > clickCooldownUntil) {
+  } else if (isStable && now - idleStartAt > IDLE_LEFT_MS && now > clickCooldownUntil) {
     idleClick = "left"
     clickCooldownUntil = now + IDLE_COOLDOWN_MS
     idleStartAt = now
   }
   const disconnected = now - lastAckAt > 2000
-  if (now - lastSendAt > 33 && !disconnected) {
+  if (now - lastSendAt > 33) {
     lastSendAt = now
     const x = Math.max(0, Math.min(1, gx / innerWidth))
     const y = Math.max(0, Math.min(1, gy / innerHeight))
@@ -178,8 +340,8 @@ function processFrame() {
       chrome.runtime.sendMessage({ type: "GAZE_POS", payload: { x, y, click: shouldClick, idleClick } }, () => {})
     }
   }
-  if (disconnected && now - lastSendAt > 500) {
-    lastSendAt = now
+  if (disconnected && now - lastPingAt > 500) {
+    lastPingAt = now
     if (chrome && chrome.runtime && chrome.runtime.sendMessage) {
       chrome.runtime.sendMessage({ type: "GAZE_PING" }, () => {})
     }
@@ -194,50 +356,9 @@ function processFrame() {
     })
     if (sparks.length > 14) sparks.shift()
   }
+  maybeAdjustProcessingResolution(count, effectiveMinCount)
 }
 
-function drawCover() {
-  ctx.fillStyle = "rgba(5,5,15,0.96)"
-  ctx.fillRect(0, 0, innerWidth, innerHeight)
-
-  ctx.strokeStyle = "rgba(0,255,157,0.07)"
-  ctx.lineWidth = 1
-  for (let x = 40; x < innerWidth; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, innerHeight); ctx.stroke() }
-  for (let y = 40; y < innerHeight; y += 80) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(innerWidth, y); ctx.stroke() }
-
-  ctx.shadowBlur = 40; ctx.shadowColor = "#00ff9d"; ctx.fillStyle = "#00ff9d"
-  ctx.font = "bold 128px monospace"; ctx.textAlign = "center"
-  ctx.fillText(PRODUCT, innerWidth / 2, innerHeight / 2 - 110)
-
-  ctx.shadowBlur = 25; ctx.shadowColor = "#ffd700"; ctx.fillStyle = "#ffd700"
-  ctx.font = "bold 48px monospace"
-  ctx.fillText(TAGLINE, innerWidth / 2, innerHeight / 2 + 10)
-
-  ctx.shadowBlur = 15; ctx.shadowColor = "#00ff41"; ctx.fillStyle = "#00ff41"
-  ctx.font = "bold 34px monospace"
-  ctx.fillText(SUBLINE, innerWidth / 2, innerHeight / 2 + 70)
-
-  ctx.shadowBlur = 12; ctx.font = "19px monospace"
-  ctx.fillStyle = currentProfile === 'ray1' ? "#ff00ff" : "#00ff9d"
-  ctx.fillText("1  RAY-1 BLASTER", innerWidth / 2 - 280, innerHeight / 2 + 160)
-  ctx.fillStyle = currentProfile === 'ray2' ? "#ff00ff" : "#00ff9d"
-  ctx.fillText("2  RAY-2 PHASER", innerWidth / 2 - 80, innerHeight / 2 + 160)
-  ctx.fillStyle = currentProfile === 'ray3' ? "#ff00ff" : "#00ff9d"
-  ctx.fillText("3  RAY-3 SNIPER", innerWidth / 2 + 120, innerHeight / 2 + 160)
-
-  ctx.fillStyle = "#00ff9d"
-  ctx.fillText("4 MINIMAL   5 BALANCED   6 PERFORMANCE   7 FANCY", innerWidth / 2, innerHeight / 2 + 200)
-
-  ctx.shadowBlur = 20; ctx.shadowColor = "#ffd700"; ctx.fillStyle = "#ffd700"
-  ctx.font = "bold 21px monospace"
-  ctx.fillText("♥ SUPPORT THIS REMUNERABLE PROJECT $", innerWidth / 2, innerHeight - 115)
-
-  ctx.shadowBlur = 8; ctx.fillStyle = "#00ff9d"; ctx.font = "15px monospace"
-  ctx.fillText("ko-fi.com / paypal.me / github sponsors", innerWidth / 2, innerHeight - 82)
-
-  ctx.shadowBlur = 0; ctx.fillStyle = "#ffffff"; ctx.font = "17px monospace"
-  ctx.fillText("PRESS SPACE or CLICK TO ACTIVATE RAYGUN", innerWidth / 2, innerHeight - 38)
-}
 
 function drawGaze() {
   ctx.clearRect(0, 0, innerWidth, innerHeight)
@@ -252,14 +373,6 @@ function drawGaze() {
   const tracePulse = isTraceRecording ? Math.sin(Date.now() / 70) * 0.4 + 1.35 : 1
   const bm = theme.blurMult
 
-  // core raygun dot
-  const pulse = Math.sin(Date.now() / 140) * 5 + 16 + confidence / 8
-  ctx.shadowBlur = -1
-  ctx.shadowColor = "#00ff9d"
-  ctx.fillStyle = `rgba(0,255,157,${0.7 + confidence / 280})`
-  ctx.beginPath()
-  ctx.arc(gx, gy, pulse, 0, Math.PI * 2)
-  ctx.fill()
 
   // === 8-LAYER DEEP NEURAL MNIST RETICLE ===
   const layerRadii = [112, 99, 86, 73, 59, 46, 33, 19]
@@ -278,26 +391,26 @@ function drawGaze() {
   }
 
   // 58 orbiting MNIST neural nodes (scaled by theme)
-  ctx.shadowBlur = 19 * bm * tracePulse
+  ctx.shadowBlur = 5 * bm * tracePulse
   ctx.shadowColor = "#ffffff"
   ctx.fillStyle = "#ffffff"
   ctx.font = "bold 15px monospace"
   ctx.textAlign = "center"
   ctx.textBaseline = "middle"
-  const mnistSyms = "0123456789ΦΨΔλ▒░▓█ΣΩ⊗⊕∇∞≈≠"
+  const mnistSyms = "⚡ΦΨΔ⚡λΣΩ⚡⊗⊕∇⚡∞≈≠⚡"
   for (let i = 0; i < theme.orbitCount; i++) {
     const layer = i % 8
     const radius = layerRadii[layer] - 6
-    const speed = 0.7 + layer * 0.28
+    const speed = 0.001 + layer * 0.008
     const a = t * speed + i * (Math.PI * 2 / theme.orbitCount)
     const x = gx + Math.cos(a) * radius
     const y = gy + Math.sin(a) * radius
     ctx.fillText(mnistSyms[i % mnistSyms.length], x, y)
   }
 
-  // Dynamic synapse connections (only when theme allows)
+// Dynamic synapse connections (only when theme allows)
   if (theme.synapse) {
-    ctx.shadowBlur = 8 * bm * tracePulse
+    ctx.shadowBlur = 5 * bm * tracePulse
     ctx.strokeStyle = isTraceRecording ? "rgba(255,0,136,0.85)" : "rgba(0,255,157,0.6)"
     ctx.lineWidth = 1.15
     for (let i = 0; i < theme.orbitCount; i += 4) {
@@ -312,8 +425,8 @@ function drawGaze() {
     }
   }
 
-  // Pulsing neuron nodes
-  ctx.shadowBlur = 24 * bm * tracePulse
+// Pulsing neuron nodes
+  ctx.shadowBlur = 5 * bm * tracePulse
   for (let i = 0; i < theme.pulses; i++) {
     const a = t * 3.2 + i * (Math.PI * 2 / theme.pulses)
     const nodePulse = Math.sin(t * 9 + i) * 2.5 + 4.5
@@ -324,11 +437,8 @@ function drawGaze() {
     ctx.fillRect(x - nodePulse/2, y - nodePulse/2, nodePulse, nodePulse)
   }
 
-  // Classic raygun arms
-  ctx.shadowBlur = -1
-  ctx.shadowColor = "#00ff41"
-  ctx.strokeStyle = "#00ff41"
-  ctx.lineWidth = 5
+// Classic raygun arms
+
   const r1 = 56 * Math.sin(t * 1.3)
   const r2 = 56 * Math.cos(t * 1.3)
   const r3 = 38 * Math.sin(t * 2.1)
@@ -344,10 +454,10 @@ function drawGaze() {
   ctx.moveTo(gx, gy); ctx.lineTo(gx - r4, gy + r3)
   ctx.stroke()
 
-  // Target brackets
+// Target brackets
   ctx.strokeStyle = "#ffd700"
-  ctx.lineWidth = 2.4
-  ctx.shadowBlur = 14 * bm
+  ctx.lineWidth = 1.14
+  ctx.shadowBlur = 2 * bm
   ctx.shadowColor = "#ffd700"
   ctx.beginPath()
   ctx.moveTo(gx - 26, gy - 26); ctx.lineTo(gx - 14, gy - 26); ctx.lineTo(gx - 14, gy - 14)
@@ -357,7 +467,7 @@ function drawGaze() {
   ctx.stroke()
 
   // RAYGUN HUD (left)
-  ctx.shadowBlur = 14
+  ctx.shadowBlur = 0
   ctx.shadowColor = "#ffd700"
   ctx.fillStyle = "#ffd700"
   ctx.font = "bold 19px monospace"
@@ -367,67 +477,71 @@ function drawGaze() {
   ctx.font = "13px monospace"
   ctx.fillStyle = "#00ff9d"
   ctx.fillText(`TH:${motionTh} MIN:${minCount}   ${THEMES[currentTheme].name}`, 38, 82)
+  ctx.fillText(`RES:${procW}x${procH} DYN:${runtimeDynamicResEnabled ? "ON" : "OFF"} MEM:${memoryTier.toUpperCase()}`, 38, 102)
 
   // IR EXPOSURE + TRACE RECORDING HUD (top-right)
   ctx.textAlign = "right"
   ctx.fillStyle = "#00ff9d"
-  ctx.shadowBlur = 16
+  ctx.shadowBlur = 0
   ctx.shadowColor = isTraceRecording ? "#ff0088" : "#00ff9d"
   ctx.font = "bold 21px monospace"
   ctx.fillText("IR EXPOSURE", innerWidth - 48, 68)
 
   const barW = irExposure * 2.6
   ctx.fillStyle = isTraceRecording ? "#ff0088" : "#00ff9d"
-  ctx.shadowBlur = 9
+  ctx.shadowBlur = 0
   ctx.fillRect(innerWidth - 260, 82, barW, 9)
 
-  ctx.shadowBlur = 0
+  ctx.shadowBlur = 2
   ctx.font = "bold 17px monospace"
   ctx.fillStyle = "#ffffff"
   ctx.fillText(irExposure + "%", innerWidth - 48, 94)
 
   if (isTraceRecording) {
-    ctx.shadowBlur = 22
+    ctx.shadowBlur = 2
     ctx.shadowColor = "#ff0088"
     ctx.fillStyle = "#ff0088"
     ctx.font = "bold 23px monospace"
     ctx.fillText("● TRACE REC", innerWidth - 48, 124)
   } else {
-    ctx.shadowBlur = 8
+    ctx.shadowBlur = 2
     ctx.shadowColor = "#555"
     ctx.fillStyle = "#555"
     ctx.font = "bold 17px monospace"
     ctx.fillText("TRACE IDLE", innerWidth - 48, 124)
   }
 
+  // --- VISUAL DWELL FEEDBACK (User-in-the-Loop) ---
+  const now = performance.now()
+  const dwellTime = now - idleStartAt
+  if (confidence >= MIN_CONFIDENCE && dwellTime > 100) {
+    const progress = Math.min(1, dwellTime / IDLE_LEFT_MS)
+    if (progress > 0) {
+      ctx.beginPath()
+      ctx.strokeStyle = "#ffd700" // Gold Progress Ring
+      ctx.lineWidth = 12
+      ctx.shadowBlur = 10
+      ctx.shadowColor = "#ffd700"
+      ctx.arc(gx, gy, 125, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * progress))
+      ctx.stroke()
+    }
+  }
+
   // sparks
   for (let i = sparks.length - 1; i >= 0; i--) {
     const s = sparks[i]
     const a = s.life / 28
-    ctx.shadowBlur = 14
+    ctx.shadowBlur = 2
     ctx.shadowColor = "#00ff9d"
     ctx.fillStyle = `rgba(0,255,157,${a})`
     ctx.fillRect(s.x - 2.5, s.y - 2.5, 5, 5)
     s.x += s.vx
     s.y += s.vy
-    s.life -= 1.2
+    s.life -= 1.14
     if (s.life <= 0) sparks.splice(i, 1)
   }
 }
 
-function rain() {
-  bgctx.fillStyle = "rgba(10,10,20,0.10)"
-  bgctx.fillRect(0, 0, innerWidth, innerHeight)
-  bgctx.fillStyle = "#00ff9d"
-  bgctx.font = "13px monospace"
-  for (let i = 0; i < drops.length; i++) {
-    let char = String.fromCharCode(0x30a0 + (Math.random() * 96) | 0)
-    if (Math.random() < 0.11) char = '⚡'
-    bgctx.fillText(char, i * 13, drops[i])
-    if (drops[i] > innerHeight && Math.random() > 0.96) drops[i] = 0
-    drops[i] += 12 + Math.random() * 4
-  }
-}
 
 function start() {
   navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false }).then((stream) => {
@@ -448,6 +562,12 @@ function start() {
       if (e.key === '5') setTheme('balanced')
       if (e.key === '6') setTheme('performance')
       if (e.key === '7') setTheme('fancy')
+      if (e.key === '0') {
+        showProcessView = !showProcessView
+        updateProcessPreviewVisibility()
+        log(`PROCESS PREVIEW ${showProcessView ? "ON" : "OFF"}`)
+      }
+      if (e.key === '9') toggleDynamicResolution()
     } else {
       if (e.key === '1') setProfile('ray1')
       if (e.key === '2') setProfile('ray2')
@@ -456,6 +576,12 @@ function start() {
       if (e.key === '5') setTheme('balanced')
       if (e.key === '6') setTheme('performance')
       if (e.key === '7') setTheme('fancy')
+      if (e.key === '0') {
+        showProcessView = !showProcessView
+        updateProcessPreviewVisibility()
+        log(`PROCESS PREVIEW ${showProcessView ? "ON" : "OFF"}`)
+      }
+      if (e.key === '9') toggleDynamicResolution()
       if (e.key === '+' || e.key === '=') { motionTh = Math.min(160, motionTh + 4); log(`TH ↑ ${motionTh}`) }
       if (e.key === '-' || e.key === '_') { motionTh = Math.max(50, motionTh - 4); log(`TH ↓ ${motionTh}`) }
     }
@@ -465,8 +591,7 @@ function start() {
     if (showCover) showCover = false
   })
 
-  setInterval(processFrame, 33)
-  setInterval(rain, 60)
+  setInterval(processFrame, 1)
   const drawLoop = () => {
     drawGaze()
     requestAnimationFrame(drawLoop)

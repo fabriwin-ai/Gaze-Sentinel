@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "BARRY METAL NEON SENTINEL — seL4 PROTOCOL",
-  "short_name": "Neon Sentinel",
+  "short_name": "Kro-NOS Gaze Sentinel",
   "version": "1.0.0",
   "description": "ORIGIN-COGNITIVE-OS v0.9 — Real-time gaze tracking cyberpunk HUD",
   "author": "Fabricio Cincunegui",

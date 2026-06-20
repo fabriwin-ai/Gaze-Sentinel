@@ -1,135 +1,88 @@
 const video = document.getElementById("video")
 const proc = document.getElementById("process")
 const pctx = proc.getContext("2d", { willReadFrequently: true })
-const ctx = document.getElementById("overlay").getContext("2d")
-const bgctx = document.getElementById("bg").getContext("2d")
+
 const BASE_FRAME_W = 80
 const BASE_FRAME_H = 60
-const BASE_FRAME_PIXELS = BASE_FRAME_W * BASE_FRAME_H
-const RESIZE_COOLDOWN_MS = 1200
-const DYNAMIC_RES_PROFILES = {
-  low: {
-    idle: { w: 64, h: 48 },
-    active: { w: 80, h: 60 }
-  },
-  mid: {
-    idle: { w: 80, h: 60 },
-    active: { w: 96, h: 72 }
-  },
-  high: {
-    idle: { w: 96, h: 72 },
-    active: { w: 112, h: 84 }
-  }
-}
-
 let procW = BASE_FRAME_W
 let procH = BASE_FRAME_H
-let framePixels = BASE_FRAME_PIXELS
+let framePixels = procW * procH
+
 let frames = []
 let motionPreview = null
 let motionPreviewData = null
 let enhancedGray = null
-let motionActivity = 0
-let lastResolutionAdjustAt = 0
-let runtimeDynamicResEnabled = true
-let memoryTier = "mid"
-let resolutionProfile = DYNAMIC_RES_PROFILES.mid
 let fidx = 0
-let gx = innerWidth / 1
-let gy = innerHeight / 1
+
+// Gaze point
+let gx = innerWidth / 2
+let gy = innerHeight / 2
 let targetX = gx
 let targetY = gy
 let confidence = 60
 
-// === 8-LAYER DEEP NEURAL RETICLE + 4 VISUAL THEMES ===
-let showCover = false
-const PRODUCT = "SENSE"
-const TAGLINE = "VALUABLE PROFIT PROJECT"
-const SUBLINE = "$ REMUNERABLE COVER"
+// FIR + IIR smoothing for deterministic feel
+const firBufferX = new Array(5).fill(gx)
+const firBufferY = new Array(5).fill(gy)
+let firIdx = 0
+let smoothedX = gx
+let smoothedY = gy
 
-let currentProfile = 'ray2'
-const PROFILES = {
-  ray1: { name: 'RAY-1 BLASTER',   motionTh: 68,  minCount: 13, alphaBase: 0.39, alphaMaxAdd: 0.61 },
-  ray2: { name: 'RAY-2 PHASER',    motionTh: 89,  minCount: 18, alphaBase: 0.31, alphaMaxAdd: 0.54 },
-  ray3: { name: 'RAY-3 SNIPER',    motionTh: 115, minCount: 25, alphaBase: 0.22, alphaMaxAdd: 0.41 }
-}
-
-let currentTheme = 'balanced'
-const THEMES = {
-  minimal:     { name: '4 MINIMAL',     blurMult: 0.52, orbitCount: 44, synapse: true, pulses: 4,  color1: '#00ff9d', color2: '#ffffff' },
-  balanced:    { name: '5 BALANCED',    blurMult: 1.00, orbitCount: 22, synapse: true,  pulses: 12, color1: '#00ff9d', color2: '#00ff41' },
-  performance: { name: '6 PERFORMANCE', blurMult: 0.38, orbitCount: 66, synapse: true, pulses: 0,  color1: '#00ff9d', color2: '#00ff41' },
-  fancy:       { name: '7 FANCY',       blurMult: 1.55, orbitCount: 88, synapse: true,  pulses: 20, color1: '#ff00ff', color2: '#ffd700' }
-}
-
-let motionTh = PROFILES.ray2.motionTh
-let minCount = PROFILES.ray2.minCount
-let alphaBase = PROFILES.ray2.alphaBase
-let alphaMaxAdd = PROFILES.ray2.alphaMaxAdd
-
-let irExposure = 55
-let isTraceRecording = false
-
-let sparks = []
+let motionTh = 89
+let minCount = 18
 let closedFrames = 0
-let logs = []
-const drops = Array(100).fill(0).map(() => Math.random() * innerHeight)
-let lastSendAt = 0
-let lastPingAt = 0
 let clickCooldownUntil = 0
 let lastAckAt = 0
 let idleStartAt = 0
 let idleCenter = { x: gx, y: gy }
+let lastSendAt = 0
+let lastPingAt = 0
+
+const IDLE_RADIUS = 18
+const IDLE_LEFT_MS = 420
+const IDLE_RIGHT_MS = 680
+const IDLE_COOLDOWN_MS = 850
+const MIN_CONFIDENCE = 62
+
 let showProcessView = false
-const IDLE_RADIUS = 16
-const IDLE_LEFT_MS = 400
-const IDLE_RIGHT_MS = 700
-const IDLE_COOLDOWN_MS = 900
-const MIN_CONFIDENCE = 65
+let showCover = false
+
+// Adaptive resolution
+const RESIZE_COOLDOWN_MS = 1200
+let motionActivity = 0
+let lastResolutionAdjustAt = 0
+let runtimeDynamicResEnabled = true
+let memoryTier = "mid"
+
+const DYNAMIC_RES_PROFILES = {
+  low:  { idle: { w: 64, h: 48 }, active: { w: 80, h: 60 } },
+  mid:  { idle: { w: 80, h: 60 }, active: { w: 96, h: 72 } },
+  high: { idle: { w: 96, h: 72 }, active: { w: 112, h: 84 } }
+}
 
 function clamp(v, lo, hi) {
   return v < lo ? lo : (v > hi ? hi : v)
 }
 
 function log(msg) {
-  const t = new Date().toISOString().slice(11, 19)
-  logs.push(`[${t}] ${msg}`)
-  console.log(`[SENSE RAY] ${msg}`)
+  console.log(`[SENSE RAY TRACKER] ${msg}`)
 }
 
 function detectMemoryTier() {
-  const deviceMemory = typeof navigator.deviceMemory === "number" ? navigator.deviceMemory : null
-  if (deviceMemory !== null) {
-    if (deviceMemory >= 8) return "high"
-    if (deviceMemory >= 4) return "mid"
-    return "low"
+  if (navigator.deviceMemory) {
+    return navigator.deviceMemory >= 8 ? "high" : navigator.deviceMemory >= 4 ? "mid" : "low"
   }
-  if (performance && performance.memory && performance.memory.jsHeapSizeLimit > 0) {
-    const heapLimitMb = performance.memory.jsHeapSizeLimit / (1024 * 1024)
-    if (heapLimitMb >= 2048) return "high"
-    if (heapLimitMb >= 1024) return "mid"
-    return "low"
+  if (performance?.memory?.jsHeapSizeLimit) {
+    const heapMb = performance.memory.jsHeapSizeLimit / (1024*1024)
+    return heapMb >= 2048 ? "high" : heapMb >= 1024 ? "mid" : "low"
   }
   return "mid"
 }
 
-function selectResolutionProfile(tier) {
-  return DYNAMIC_RES_PROFILES[tier] || DYNAMIC_RES_PROFILES.mid
-}
-
-function getHeapPressure() {
-  if (!performance || !performance.memory) return 0
-  const { usedJSHeapSize, jsHeapSizeLimit } = performance.memory
-  if (!jsHeapSizeLimit) return 0
-  return usedJSHeapSize / jsHeapSizeLimit
-}
-
 function allocateProcessingBuffers(w, h) {
-  procW = w
-  procH = h
+  procW = w; procH = h
   framePixels = procW * procH
-  proc.width = procW
-  proc.height = procH
+  proc.width = procW; proc.height = procH
   frames = [
     new Uint8ClampedArray(framePixels),
     new Uint8ClampedArray(framePixels),
@@ -139,466 +92,179 @@ function allocateProcessingBuffers(w, h) {
   motionPreview = pctx.createImageData(procW, procH)
   motionPreviewData = motionPreview.data
   enhancedGray = new Uint8ClampedArray(framePixels)
-  updateProcessPreviewVisibility()
 }
-
-function maybeAdjustProcessingResolution(count, effectiveMinCount) {
-  if (!runtimeDynamicResEnabled) return
-  const now = performance.now()
-  const motionSignal = clamp(count / Math.max(1, effectiveMinCount), 0, 2.4)
-  motionActivity = motionActivity * 0.86 + motionSignal * 0.14
-
-  let target = motionActivity >= 0.92 ? resolutionProfile.active : resolutionProfile.idle
-  const heapPressure = getHeapPressure()
-  if (heapPressure > 0.88) target = resolutionProfile.idle
-  if (heapPressure > 0.94 && memoryTier !== "low") target = DYNAMIC_RES_PROFILES.low.idle
-
-  if (target.w === procW && target.h === procH) return
-  if (now - lastResolutionAdjustAt < RESIZE_COOLDOWN_MS) return
-  lastResolutionAdjustAt = now
-  allocateProcessingBuffers(target.w, target.h)
-  log(`ADAPTIVE RES ${procW}x${procH} (${motionActivity >= 0.92 ? "MOTION" : "IDLE"})`)
-}
-
-function toggleDynamicResolution() {
-  runtimeDynamicResEnabled = !runtimeDynamicResEnabled
-  motionActivity = 0
-  if (!runtimeDynamicResEnabled) {
-    const idle = resolutionProfile.idle
-    if (idle.w !== procW || idle.h !== procH) allocateProcessingBuffers(idle.w, idle.h)
-  }
-  log(`DYNAMIC RESOLUTION ${runtimeDynamicResEnabled ? "ON" : "OFF"}`)
-}
-
-function resize() {
-  const w = innerWidth
-  const h = innerHeight
-  const bg = document.getElementById("bg")
-  const overlay = document.getElementById("overlay")
-  bg.width = w
-  bg.height = h
-  overlay.width = w
-  overlay.height = h
-}
-window.addEventListener("resize", resize)
-resize()
 
 memoryTier = detectMemoryTier()
-resolutionProfile = selectResolutionProfile(memoryTier)
-allocateProcessingBuffers(resolutionProfile.idle.w, resolutionProfile.idle.h)
-log(`MEMORY TIER ${memoryTier.toUpperCase()} | BASE RES ${procW}x${procH}`)
+allocateProcessingBuffers(80, 60)
+log(`MEMORY TIER: ${memoryTier.toUpperCase()} | RES: ${procW}x${procH}`)
 
-if (chrome && chrome.runtime && chrome.runtime.onMessage) {
-  chrome.runtime.onMessage.addListener((m) => {
-    if (m && m.type === "GAZE_ACK") lastAckAt = performance.now()
+if (chrome?.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener(m => {
+    if (m?.type === "GAZE_ACK") lastAckAt = performance.now()
   })
-}
-
-function setProfile(p) {
-  if (!PROFILES[p]) return
-  currentProfile = p
-  const pr = PROFILES[p]
-  motionTh = pr.motionTh
-  minCount = pr.minCount
-  alphaBase = pr.alphaBase
-  alphaMaxAdd = pr.alphaMaxAdd
-  log(`RAYGUN PROFILE → ${pr.name}`)
-}
-
-function setTheme(t) {
-  if (!THEMES[t]) return
-  currentTheme = t
-  log(`VISUAL THEME → ${THEMES[t].name}`)
-}
-
-function updateProcessPreviewVisibility() {
-  proc.style.display = showProcessView ? "block" : "none"
-  if (!showProcessView) return
-  const maxPreviewW = 280
-  const maxPreviewH = 210
-  const preferredScale = 2.5
-  const scale = Math.min(preferredScale, maxPreviewW / procW, maxPreviewH / procH)
-  const previewW = Math.max(144, Math.round(procW * scale))
-  const previewH = Math.max(108, Math.round(procH * scale))
-  proc.style.position = "fixed"
-  proc.style.right = "16px"
-  proc.style.bottom = "16px"
-  proc.style.width = `${previewW}px`
-  proc.style.height = `${previewH}px`
-  proc.style.imageRendering = "pixelated"
-  proc.style.opacity = "0.88"
-  proc.style.border = "1px solid rgba(255,255,255,0.45)"
-  proc.style.boxShadow = "0 0 16px rgba(0,0,0,0.55)"
-  proc.style.zIndex = "2147483646"
 }
 
 function processFrame() {
   if (video.videoWidth === 0 || showCover) return
+
   pctx.drawImage(video, 0, 0, procW, procH)
   const data = pctx.getImageData(0, 0, procW, procH).data
-  let sum = 0
-  let minGray = 255
-  let maxGray = 0
-  const pixelScale = framePixels / BASE_FRAME_PIXELS
-  const effectiveMinCount = Math.max(8, Math.round(minCount * pixelScale))
+
+  let sum = 0, minGray = 255, maxGray = 0
   for (let i = 0, j = 0; i < data.length; i += 4, j++) {
-    const g = (data[i] * 0.3 + data[i + 1] * 0.59 + data[i + 2] * 0.11) | 0
+    const g = (data[i]*0.3 + data[i+1]*0.59 + data[i+2]*0.11) | 0
     enhancedGray[j] = g
     sum += g
     if (g < minGray) minGray = g
     if (g > maxGray) maxGray = g
   }
+
   const contrastRange = Math.max(16, maxGray - minGray)
   for (let i = 0; i < framePixels; i++) {
     const n = (enhancedGray[i] - minGray) / contrastRange
-    const boosted = Math.pow(clamp(n, 0, 1), 0.82)
-    enhancedGray[i] = clamp((boosted * 255) | 0, 0, 255)
+    enhancedGray[i] = clamp(Math.pow(clamp(n, 0, 1), 0.82) * 255 | 0, 0, 255)
   }
+
   fidx = (fidx + 1) % 3
   frames[fidx].set(enhancedGray)
+
   let sx = 0, sy = 0, count = 0
   const p = (fidx + 2) % 3
   const pp = (fidx + 1) % 3
-  const adaptiveMotionTh = clamp((motionTh * (0.76 + (contrastRange / 255) * 0.36)) | 0, 38, 170)
+  const adaptiveTh = clamp((motionTh * (0.76 + contrastRange / 255 * 0.36)) | 0, 40, 160)
+
   for (let i = 0, k = 0; i < framePixels; i++, k += 4) {
     const diff = ((frames[fidx][i] ^ frames[p][i]) | (frames[p][i] ^ frames[pp][i])) & 0xf0
-    if (diff > adaptiveMotionTh) {
+    if (diff > adaptiveTh) {
       sx += i % procW
       sy += (i / procW) | 0
       count++
-      motionPreviewData[k] = 255
-      motionPreviewData[k + 1] = 255
-      motionPreviewData[k + 2] = 255
-      motionPreviewData[k + 3] = 255
+      motionPreviewData[k] = motionPreviewData[k+1] = motionPreviewData[k+2] = 255
+      motionPreviewData[k+3] = 255
     } else {
-      const bg = clamp((enhancedGray[i] * 0.45) | 0, 18, 180)
-      motionPreviewData[k] = bg
-      motionPreviewData[k + 1] = bg
-      motionPreviewData[k + 2] = bg
-      motionPreviewData[k + 3] = 255
+      const bg = clamp(enhancedGray[i] * 0.45 | 0, 20, 180)
+      motionPreviewData[k] = motionPreviewData[k+1] = motionPreviewData[k+2] = bg
+      motionPreviewData[k+3] = 255
     }
   }
   pctx.putImageData(motionPreview, 0, 0)
-  if (count >= effectiveMinCount) {
+
+  const pixelScale = framePixels / (BASE_FRAME_W * BASE_FRAME_H)
+  const effectiveMin = Math.max(8, Math.round(minCount * pixelScale))
+
+  if (count >= effectiveMin) {
     targetX = (sx / count / procW) * innerWidth
     targetY = (sy / count / procH) * innerHeight
     targetX = innerWidth - targetX
     targetY = innerHeight - targetY
-    const normalizedCount = count / Math.max(0.25, pixelScale)
-    confidence = Math.min(98, 48 + normalizedCount * 2.1)
+    confidence = Math.min(98, 50 + (count / (effectiveMin * 0.6)) * 2.2)
   } else {
-    confidence = Math.max(20, confidence - 6)
+    confidence = Math.max(25, confidence - 7)
   }
-  if (sum / framePixels < 35) closedFrames++
+
+  if (sum / framePixels < 38) closedFrames++ 
   else closedFrames = 0
 
-  const avgGray = sum / framePixels
-  irExposure = Math.floor(Math.max(8, Math.min(98, avgGray * 1.72)))
-  isTraceRecording = (count >= effectiveMinCount && confidence > 45)
+  // FIR + IIR
+  firBufferX[firIdx] = targetX
+  firBufferY[firIdx] = targetY
+  firIdx = (firIdx + 1) % 5
+  const firAvgX = firBufferX.reduce((a,b) => a+b, 0) / 5
+  const firAvgY = firBufferY.reduce((a,b) => a+b, 0) / 5
 
-  const dx = targetX - gx
-  const dy = targetY - gy
-  const dist = Math.hypot(dx, dy)
-  const alpha = alphaBase + Math.min(alphaMaxAdd, dist * 0.0026)
-  gx = gx * (1 - alpha) + targetX * alpha
-  gy = gy * (1 - alpha) + targetY * alpha
+  const alpha = 0.28 + Math.min(0.55, Math.hypot(targetX - gx, targetY - gy) * 0.0018)
+  smoothedX = smoothedX * (1 - alpha) + firAvgX * alpha
+  smoothedY = smoothedY * (1 - alpha) + firAvgY * alpha
+  gx = smoothedX
+  gy = smoothedY
 
   const now = performance.now()
   const shouldClick = closedFrames > 6 && now > clickCooldownUntil
   if (shouldClick) {
-    clickCooldownUntil = now + 16000
+    clickCooldownUntil = now + 14000
     closedFrames = 0
   }
-  // --- DUAL-LAYERED ANTI-FALSE POSITIVE METHOD ---
-  const isStable = confidence >= MIN_CONFIDENCE
-  const dxIdle = gx - idleCenter.x
-  const dyIdle = gy - idleCenter.y
-  const distIdle = Math.hypot(dxIdle, dyIdle)
 
-  // 1. Confidence-Gated Interaction + 2. Reset on Drift/Signal Loss
+  // Dwell clicks
+  const isStable = confidence >= MIN_CONFIDENCE
+  const distIdle = Math.hypot(gx - idleCenter.x, gy - idleCenter.y)
   if (distIdle > IDLE_RADIUS || !isStable) {
     idleCenter = { x: gx, y: gy }
     idleStartAt = now
   }
 
   let idleClick = null
-  if (isStable && now - idleStartAt > IDLE_RIGHT_MS && now > clickCooldownUntil) {
+  const dwellTime = now - idleStartAt
+  if (isStable && dwellTime > IDLE_RIGHT_MS && now > clickCooldownUntil) {
     idleClick = "right"
     clickCooldownUntil = now + IDLE_COOLDOWN_MS
     idleStartAt = now
-  } else if (isStable && now - idleStartAt > IDLE_LEFT_MS && now > clickCooldownUntil) {
+  } else if (isStable && dwellTime > IDLE_LEFT_MS && now > clickCooldownUntil) {
     idleClick = "left"
     clickCooldownUntil = now + IDLE_COOLDOWN_MS
     idleStartAt = now
   }
-  const disconnected = now - lastAckAt > 2000
-  if (now - lastSendAt > 33) {
+
+  // Edge scroll for YouTube
+  let scroll = 0
+  if (gy < innerHeight * 0.16) scroll = -22
+  else if (gy > innerHeight * 0.84) scroll = 22
+
+  const dwellProgress = isStable ? Math.min(1, dwellTime / IDLE_LEFT_MS) : 0
+  const isTrace = count >= effectiveMin && confidence > 45
+
+  // Send to content script
+  if (now - lastSendAt > 16) {
     lastSendAt = now
-    const x = Math.max(0, Math.min(1, gx / innerWidth))
-    const y = Math.max(0, Math.min(1, gy / innerHeight))
-    if (chrome && chrome.runtime && chrome.runtime.sendMessage) {
-      chrome.runtime.sendMessage({ type: "GAZE_POS", payload: { x, y, click: shouldClick, idleClick } }, () => {})
-    }
-  }
-  if (disconnected && now - lastPingAt > 500) {
-    lastPingAt = now
-    if (chrome && chrome.runtime && chrome.runtime.sendMessage) {
-      chrome.runtime.sendMessage({ type: "GAZE_PING" }, () => {})
-    }
-  }
-  if (Math.random() < 0.7) {
-    sparks.push({
-      x: gx + (Math.random() - 0.5) * 24,
-      y: gy + (Math.random() - 0.5) * 24,
-      vx: (Math.random() - 0.5) * 3.8,
-      vy: (Math.random() - 0.5) * 3.8,
-      life: 22 + Math.random() * 12
+    const x = clamp(gx / innerWidth, 0, 1)
+    const y = clamp(gy / innerHeight, 0, 1)
+
+    chrome?.runtime?.sendMessage({
+      type: "GAZE_POS",
+      payload: {
+        x, y,
+        click: shouldClick,
+        idleClick,
+        scroll,
+        dwellProgress,
+        trace: isTrace,
+        confidence
+      }
     })
-    if (sparks.length > 14) sparks.shift()
-  }
-  maybeAdjustProcessingResolution(count, effectiveMinCount)
-}
-
-
-function drawGaze() {
-  ctx.clearRect(0, 0, innerWidth, innerHeight)
-
-  if (showCover) {
-    drawCover()
-    return
   }
 
-  const theme = THEMES[currentTheme]
-  const t = Date.now() / 240
-  const tracePulse = isTraceRecording ? Math.sin(Date.now() / 70) * 0.4 + 1.35 : 1
-  const bm = theme.blurMult
-
-
-  // === 8-LAYER DEEP NEURAL MNIST RETICLE ===
-  const layerRadii = [112, 99, 86, 73, 59, 46, 33, 19]
-  const layerWidths = [13, 8.5, 6.2, 4.8, 3.5, 2.9, 2.2, 4]
-  const layerBlur  = [68, 52, 39, 29, 21, 16, 12, 9]
-  const layerAlpha = [0.26, 0.55, 0.82, 0.95, 0.88, 0.72, 0.65, 1]
-
-  for (let l = 0; l < 8; l++) {
-    ctx.shadowBlur = layerBlur[l] * bm * tracePulse
-    ctx.shadowColor = (l % 2 === 0) ? theme.color1 : theme.color2
-    ctx.strokeStyle = `rgba(255,255,255,${layerAlpha[l]})`
-    ctx.lineWidth = layerWidths[l]
-    ctx.beginPath()
-    ctx.arc(gx, gy, layerRadii[l], 0, Math.PI * 2)
-    ctx.stroke()
-  }
-
-  // 58 orbiting MNIST neural nodes (scaled by theme)
-  ctx.shadowBlur = 5 * bm * tracePulse
-  ctx.shadowColor = "#ffffff"
-  ctx.fillStyle = "#ffffff"
-  ctx.font = "bold 15px monospace"
-  ctx.textAlign = "center"
-  ctx.textBaseline = "middle"
-  const mnistSyms = "⚡ΦΨΔ⚡λΣΩ⚡⊗⊕∇⚡∞≈≠⚡"
-  for (let i = 0; i < theme.orbitCount; i++) {
-    const layer = i % 8
-    const radius = layerRadii[layer] - 6
-    const speed = 0.001 + layer * 0.008
-    const a = t * speed + i * (Math.PI * 2 / theme.orbitCount)
-    const x = gx + Math.cos(a) * radius
-    const y = gy + Math.sin(a) * radius
-    ctx.fillText(mnistSyms[i % mnistSyms.length], x, y)
-  }
-
-// Dynamic synapse connections (only when theme allows)
-  if (theme.synapse) {
-    ctx.shadowBlur = 5 * bm * tracePulse
-    ctx.strokeStyle = isTraceRecording ? "rgba(255,0,136,0.85)" : "rgba(0,255,157,0.6)"
-    ctx.lineWidth = 1.15
-    for (let i = 0; i < theme.orbitCount; i += 4) {
-      const a1 = t * 1.6 + i * 0.14
-      const a2 = t * 2.3 + (i + 11) * 0.14
-      const r1 = layerRadii[i % 8] - 8
-      const r2 = layerRadii[(i + 3) % 8] - 8
-      ctx.beginPath()
-      ctx.moveTo(gx + Math.cos(a1) * r1, gy + Math.sin(a1) * r1)
-      ctx.lineTo(gx + Math.cos(a2) * r2, gy + Math.sin(a2) * r2)
-      ctx.stroke()
-    }
-  }
-
-// Pulsing neuron nodes
-  ctx.shadowBlur = 5 * bm * tracePulse
-  for (let i = 0; i < theme.pulses; i++) {
-    const a = t * 3.2 + i * (Math.PI * 2 / theme.pulses)
-    const nodePulse = Math.sin(t * 9 + i) * 2.5 + 4.5
-    const r = layerRadii[i % 8] - 14
-    const x = gx + Math.cos(a) * r
-    const y = gy + Math.sin(a) * r
-    ctx.fillStyle = isTraceRecording ? "#ff0088" : theme.color1
-    ctx.fillRect(x - nodePulse/2, y - nodePulse/2, nodePulse, nodePulse)
-  }
-
-// Classic raygun arms
-
-  const r1 = 56 * Math.sin(t * 1.3)
-  const r2 = 56 * Math.cos(t * 1.3)
-  const r3 = 38 * Math.sin(t * 2.1)
-  const r4 = 38 * Math.cos(t * 2.1)
-  ctx.beginPath()
-  ctx.moveTo(gx, gy); ctx.lineTo(gx + r1, gy + r2)
-  ctx.moveTo(gx, gy); ctx.lineTo(gx - r2, gy + r1)
-  ctx.stroke()
-
-  ctx.lineWidth = 2.6
-  ctx.beginPath()
-  ctx.moveTo(gx, gy); ctx.lineTo(gx + r3, gy + r4)
-  ctx.moveTo(gx, gy); ctx.lineTo(gx - r4, gy + r3)
-  ctx.stroke()
-
-// Target brackets
-  ctx.strokeStyle = "#ffd700"
-  ctx.lineWidth = 1.14
-  ctx.shadowBlur = 2 * bm
-  ctx.shadowColor = "#ffd700"
-  ctx.beginPath()
-  ctx.moveTo(gx - 26, gy - 26); ctx.lineTo(gx - 14, gy - 26); ctx.lineTo(gx - 14, gy - 14)
-  ctx.moveTo(gx + 26, gy - 26); ctx.lineTo(gx + 14, gy - 26); ctx.lineTo(gx + 14, gy - 14)
-  ctx.moveTo(gx - 26, gy + 26); ctx.lineTo(gx - 14, gy + 26); ctx.lineTo(gx - 14, gy + 14)
-  ctx.moveTo(gx + 26, gy + 26); ctx.lineTo(gx + 14, gy + 26); ctx.lineTo(gx + 14, gy + 14)
-  ctx.stroke()
-
-  // RAYGUN HUD (left)
-  ctx.shadowBlur = 0
-  ctx.shadowColor = "#ffd700"
-  ctx.fillStyle = "#ffd700"
-  ctx.font = "bold 19px monospace"
-  ctx.textAlign = "left"
-  ctx.fillText(PROFILES[currentProfile].name, 38, 58)
-
-  ctx.font = "13px monospace"
-  ctx.fillStyle = "#00ff9d"
-  ctx.fillText(`TH:${motionTh} MIN:${minCount}   ${THEMES[currentTheme].name}`, 38, 82)
-  ctx.fillText(`RES:${procW}x${procH} DYN:${runtimeDynamicResEnabled ? "ON" : "OFF"} MEM:${memoryTier.toUpperCase()}`, 38, 102)
-
-  // IR EXPOSURE + TRACE RECORDING HUD (top-right)
-  ctx.textAlign = "right"
-  ctx.fillStyle = "#00ff9d"
-  ctx.shadowBlur = 0
-  ctx.shadowColor = isTraceRecording ? "#ff0088" : "#00ff9d"
-  ctx.font = "bold 21px monospace"
-  ctx.fillText("IR EXPOSURE", innerWidth - 48, 68)
-
-  const barW = irExposure * 2.6
-  ctx.fillStyle = isTraceRecording ? "#ff0088" : "#00ff9d"
-  ctx.shadowBlur = 0
-  ctx.fillRect(innerWidth - 260, 82, barW, 9)
-
-  ctx.shadowBlur = 2
-  ctx.font = "bold 17px monospace"
-  ctx.fillStyle = "#ffffff"
-  ctx.fillText(irExposure + "%", innerWidth - 48, 94)
-
-  if (isTraceRecording) {
-    ctx.shadowBlur = 2
-    ctx.shadowColor = "#ff0088"
-    ctx.fillStyle = "#ff0088"
-    ctx.font = "bold 23px monospace"
-    ctx.fillText("● TRACE REC", innerWidth - 48, 124)
-  } else {
-    ctx.shadowBlur = 2
-    ctx.shadowColor = "#555"
-    ctx.fillStyle = "#555"
-    ctx.font = "bold 17px monospace"
-    ctx.fillText("TRACE IDLE", innerWidth - 48, 124)
-  }
-
-  // --- VISUAL DWELL FEEDBACK (User-in-the-Loop) ---
-  const now = performance.now()
-  const dwellTime = now - idleStartAt
-  if (confidence >= MIN_CONFIDENCE && dwellTime > 100) {
-    const progress = Math.min(1, dwellTime / IDLE_LEFT_MS)
-    if (progress > 0) {
-      ctx.beginPath()
-      ctx.strokeStyle = "#ffd700" // Gold Progress Ring
-      ctx.lineWidth = 12
-      ctx.shadowBlur = 10
-      ctx.shadowColor = "#ffd700"
-      ctx.arc(gx, gy, 125, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * progress))
-      ctx.stroke()
-    }
-  }
-
-  // sparks
-  for (let i = sparks.length - 1; i >= 0; i--) {
-    const s = sparks[i]
-    const a = s.life / 28
-    ctx.shadowBlur = 2
-    ctx.shadowColor = "#00ff9d"
-    ctx.fillStyle = `rgba(0,255,157,${a})`
-    ctx.fillRect(s.x - 2.5, s.y - 2.5, 5, 5)
-    s.x += s.vx
-    s.y += s.vy
-    s.life -= 1.14
-    if (s.life <= 0) sparks.splice(i, 1)
+  if (now - lastAckAt > 2200 && now - lastPingAt > 600) {
+    lastPingAt = now
+    chrome?.runtime?.sendMessage({ type: "GAZE_PING" })
   }
 }
-
 
 function start() {
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false }).then((stream) => {
+  navigator.mediaDevices.getUserMedia({ 
+    video: { facingMode: "user", width: {ideal: 640}, height: {ideal: 480} }
+  }).then(stream => {
     video.srcObject = stream
-    return video.play()
+    video.play().catch(() => {})
   }).catch(() => log("Camera access denied"))
 
-  window.addEventListener('keydown', (e) => {
-    if (showCover) {
-      if (e.key === ' ' || e.key === 'Enter' || e.key >= '1' && e.key <= '7') {
-        showCover = false
-        log("RAYGUN EYE-POINTING ACTIVATED — TRACE RECORDING ENABLED")
-      }
-      if (e.key === '1') setProfile('ray1')
-      if (e.key === '2') setProfile('ray2')
-      if (e.key === '3') setProfile('ray3')
-      if (e.key === '4') setTheme('minimal')
-      if (e.key === '5') setTheme('balanced')
-      if (e.key === '6') setTheme('performance')
-      if (e.key === '7') setTheme('fancy')
-      if (e.key === '0') {
-        showProcessView = !showProcessView
-        updateProcessPreviewVisibility()
-        log(`PROCESS PREVIEW ${showProcessView ? "ON" : "OFF"}`)
-      }
-      if (e.key === '9') toggleDynamicResolution()
-    } else {
-      if (e.key === '1') setProfile('ray1')
-      if (e.key === '2') setProfile('ray2')
-      if (e.key === '3') setProfile('ray3')
-      if (e.key === '4') setTheme('minimal')
-      if (e.key === '5') setTheme('balanced')
-      if (e.key === '6') setTheme('performance')
-      if (e.key === '7') setTheme('fancy')
-      if (e.key === '0') {
-        showProcessView = !showProcessView
-        updateProcessPreviewVisibility()
-        log(`PROCESS PREVIEW ${showProcessView ? "ON" : "OFF"}`)
-      }
-      if (e.key === '9') toggleDynamicResolution()
-      if (e.key === '+' || e.key === '=') { motionTh = Math.min(160, motionTh + 4); log(`TH ↑ ${motionTh}`) }
-      if (e.key === '-' || e.key === '_') { motionTh = Math.max(50, motionTh - 4); log(`TH ↓ ${motionTh}`) }
+  window.addEventListener('keydown', e => {
+    if (e.key === '1') motionTh = Math.max(50, motionTh - 6)
+    if (e.key === '2') motionTh = Math.min(160, motionTh + 6)
+    if (e.key === '0') {
+      showProcessView = !showProcessView
+      proc.style.display = showProcessView ? "block" : "none"
     }
+    if (e.key === 'Escape') showCover = !showCover
   })
 
-  document.getElementById("overlay").addEventListener('click', () => {
-    if (showCover) showCover = false
-  })
-
-  setInterval(processFrame, 1)
-  const drawLoop = () => {
-    drawGaze()
-    requestAnimationFrame(drawLoop)
+  // Main loop - edge friendly
+  const loop = () => {
+    processFrame()
+    requestAnimationFrame(loop)
   }
-  drawLoop()
-  setProfile('ray2')
-  setTheme('balanced')
+  loop()
+
+  log("Tracker ready — aesthetic overlay active on tabs")
 }
 
 start()

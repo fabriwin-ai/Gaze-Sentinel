@@ -10,103 +10,165 @@ Real-time gaze-driven browser control extension with a camera processing page (`
 - `index.js`: gaze extraction, XOR motion logic, smoothing, HUD rendering, and runtime controls.
 - `content-script.js`: in-page overlay cursor, move/click dispatch, overlay sizing.
 - `shared.js`: shared helper constants/utilities.
+- `algorithms/`: neural and decision-tree logic for gaze routing and protocol control.
+  - `gaze-neural-engine.js`: gradient descent + 4D perceptron + ReLU recursive memory.
+  - `decision-tree-gaze-router.js`: minimal error matrix and probability history selection.
+  - `enhanced-decision-router.js`: top-3 page-source ranking, next-link estimation, and probability chain output.
+  - `gaze-tab-controller.js`: active tab/source tracking plus debug decision overlay.
+  - `gaze-decision-rest-api.js`: REST control API for switching mode and keystroke bindings.
+
+## Decision-Tree Gaze Routing
+
+The repository now includes a decision-layer that redirects gaze attention to the best page-source container using a minimal-error matrix and historical user-probability trace.
+
+### Ranking model
+
+Each page-source container is compared using:
+
+- minimal error score from the error matrix
+- historical probability of the user selecting that source
+- the next probable link/proximate target within the same container
+- weighted ranking of the best three candidates
+
+This produces a ranked order of the top three possible targets, displayed as percentages.
+
+### Example decision chain
+
+1. Source page container: current active page context
+2. Next probable link: most likely proximate page target within that container
+3. Final choice: ranked candidate among the top three source paths
+
+The system selects the lowest error path while keeping user history and probable transitions in view.
+
+## Control Modes
+
+The decision layer supports two modes:
+
+- `AUTO` tree mode: hardcoded decision-making based on error matrix + probability history
+- `MANUAL` mode: user-controlled selection via keyboard navigation
+
+### Keyboard bindings
+
+- `Ctrl + D`: toggle auto/manual decision mode
+- `Arrow Up / Arrow Left`: move to previous choice
+- `Arrow Down / Arrow Right`: move to next choice
+- `Ctrl + G`: toggle decision overlay
+- `Enter`: record a hit / accepted decision
+- `Backspace`: record a miss / rejected decision
+
+## REST API Control
+
+The repository includes a lightweight control API module for dynamic protocol switching and keystroke changes.
+
+### Useful endpoints
+
+- `GET /api/status`: get current mode and status
+- `GET /api/bindings`: list current keystroke bindings
+- `GET /api/top-three`: read the current top three probable page-source choices
+- `POST /api/mode/toggle`: switch between auto and manual decision mode
+- `POST /api/feedback`: record hit or miss against the selected choice
+- `POST /api/bindings/update`: update one or more bindings
+- `PUT /api/bindings/:bindingKey`: override a single key binding
+
+Example payload:
+
+```json
+{
+  "toggleAutoMode": "alt+a",
+  "toggleOverlay": "alt+o",
+  "navigateNext": "arrowright"
+}
+```
+
+## Overlay Debug Output
+
+The decision overlay reports the top three source candidates as percentages with:
+
+- source title
+- source URL
+- next most probable link title and URL
+- weighted probability percentage
+- error estimate
+
+This is intended to help monitor the minimal error path and the highest-probability user-selection history.
 
 ## Actualizations (Detailed)
 
-Last update: `2026-03-22`
+Last update: `2026-10-05`
 
 ### 1) Adaptive RAM + Motion Resolution
 
 Implemented dynamic processing quality in `index.js`:
 
-- Added memory-tier detection:
-  - `navigator.deviceMemory` primary signal.
-  - `performance.memory.jsHeapSizeLimit` fallback.
-- Added resolution profiles (`low`, `mid`, `high`) with `idle` and `active` sizes.
-- Added dynamic buffer allocator to safely recreate frame buffers on resolution changes.
-- Added motion activity model + cooldown (`RESIZE_COOLDOWN_MS`) to keep transitions smooth.
-- Added heap-pressure guard:
-  - falls back to lower resolution when JS heap usage is high.
+- Added memory-tier detection
+- Added resolution profiles (`low`, `mid`, `high`)
+- Added buffer resizing and recoil protection
+- Added motion activity and heap-pressure fallback
 
-Key functions:
+### 2) Neural Gaze Signal Processing
 
-- `detectMemoryTier()`
-- `selectResolutionProfile(tier)`
-- `getHeapPressure()`
-- `allocateProcessingBuffers(w, h)`
-- `maybeAdjustProcessingResolution(count, effectiveMinCount)`
-- `toggleDynamicResolution()`
+The neural layer in `algorithms/gaze-neural-engine.js` adds:
 
-### 2) Accuracy Scaling During Motion
+- gradient descent optimizer
+- 4D spatial perceptron
+- ReLU activation filtering
+- recursive memory stabilizer
 
-`processFrame()` now scales detection logic with current frame resolution:
+### 3) Decision-Tree Routing
 
-- Uses dynamic `procW`, `procH`, and `framePixels`.
-- Scales minimum motion count with pixel ratio:
-  - `effectiveMinCount = max(8, round(minCount * pixelScale))`
-- Normalizes confidence by pixel scale, so confidence behavior stays consistent when resolution changes.
-- Keeps contrast-enhanced grayscale processing and 3-frame XOR motion comparison.
+The routing layer in `algorithms/enhanced-decision-router.js` adds:
 
-### 3) Process Preview Overlay Improvements
+- page-source containers
+- minimal-error matrix scoring
+- probability history trace
+- top-three ranking and next probable link evaluation
 
-In `index.js`:
+### 4) Active Source Tracking + Overlay
 
-- Process preview keeps motion in white and background in contrast grayscale.
-- Preview window now auto-resizes to current processing resolution while remaining small and fixed on screen.
-- Preview display hotkey:
-  - `0` toggles preview.
+The control layer in `algorithms/gaze-tab-controller.js` adds:
 
-### 4) Overlay Size Adjustment in Browser Pages
+- active tab monitoring
+- page-source collection
+- decision overlay for the top three choices
+- manual vs. auto switching logic
 
-In `content-script.js`:
+### 5) REST Control Protocol
 
-- Overlay cursor size can be adjusted on any page:
-  - `Alt + [` or `Alt + -` decreases size.
-  - `Alt + ]` or `Alt + +` increases size.
-- Size is clamped and restyled dynamically (border and glow scale with size).
+The control API in `algorithms/gaze-decision-rest-api.js` enables:
 
-### 5) Cross-Window Forwarding + ACK Flow
-
-In `background.js` and `content-script.js`:
-
-- Gaze messages are forwarded to the active tab in the last focused browser window when possible.
-- `GAZE_PING` / `GAZE_ACK` keepalive path exists to track connectivity.
-- Content script acknowledges gaze updates and applies move/click actions.
-
-### 6) Runtime Control Additions
-
-In `index.js`:
-
-- `9` toggles adaptive resolution ON/OFF.
-- HUD now shows:
-  - current processing resolution
-  - dynamic mode state
-  - memory tier
+- protocol switching between decision methods
+- dynamic key binding changes
+- event logging of mode and decision feedback
 
 ## Controls
 
 From `index.js` gaze page:
 
-- `Space` / `Enter`: activate gaze mode from cover.
-- `1`, `2`, `3`: ray profiles.
-- `4`, `5`, `6`, `7`: visual themes.
-- `0`: process preview toggle.
-- `9`: adaptive resolution toggle.
-- `+` / `-`: motion threshold adjust.
+- `Space` / `Enter`: activate gaze mode from cover
+- `1`, `2`, `3`: ray profiles
+- `4`, `5`, `6`, `7`: visual themes
+- `0`: process preview toggle
+- `9`: adaptive resolution toggle
+- `+` / `-`: motion threshold adjust
+- `Ctrl + D`: toggle auto/manual decision tree
+- `Ctrl + G`: show/hide decision overlay
 
 From any browser page (`content-script.js`):
 
-- `Alt + [` / `Alt + ]`: overlay size down/up.
+- `Alt + [` / `Alt + ]`: overlay size down/up
 
 ## How To Run
 
 1. Open `chrome://extensions`.
 2. Enable Developer mode.
 3. Click "Load unpacked" and select this folder.
-4. Click extension action to open `index.html`.
+4. Click the extension action to open `index.html`.
 5. Grant camera permission and start tracking.
+6. Switch between auto and manual decision modes as needed.
 
 ## Notes
 
 - Adaptive resolution depends on browser support for memory APIs.
-- If `performance.memory` is unavailable, adaptive logic still works using motion signal and device memory fallback.
+- The decision and neural layers are intentionally lightweight and browser-safe.
+- The architecture is designed as a deterministic from-scratch model rather than a dependency-heavy ML stack.
+- The system aims to balance low-error target selection with learned probability history and page-source context.

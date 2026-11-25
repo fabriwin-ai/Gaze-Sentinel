@@ -30,7 +30,9 @@
   $("om-up").addEventListener("click",()=>window.scrollBy({top:-Math.max(280,innerHeight*.7),behavior:"smooth"}));
   $("om-down").addEventListener("click",()=>window.scrollBy({top:Math.max(280,innerHeight*.7),behavior:"smooth"}));
   $("om-focus").addEventListener("click",()=>{if(!latestTarget||root.contains(latestTarget))return;latestTarget.scrollIntoView({behavior:"smooth",block:"center"});if(latestTarget.matches("a,button,input,textarea,select,[tabindex]"))latestTarget.focus({preventScroll:true});});
-  $("om-clear").addEventListener("click",()=>{snapshot=field.clearMemory();render(snapshot);});\n  $("om-plasticity").addEventListener("click",e=>{const next=!field.plasticity;snapshot=field.configure({plasticity:next});e.currentTarget.textContent="Plasticidad: "+(next?"ON":"OFF");render(snapshot);});\n  $("om-reset").addEventListener("click",()=>{snapshot=field.resetLearning();render(snapshot);});
+  $("om-clear").addEventListener("click",()=>{snapshot=field.clearMemory();render(snapshot);});
+  $("om-plasticity").addEventListener("click",e=>{const next=!field.plasticity;snapshot=field.configure({plasticity:next});e.currentTarget.textContent="Plasticidad: "+(next?"ON":"OFF");render(snapshot);});
+  $("om-reset").addEventListener("click",()=>{snapshot=field.resetLearning();render(snapshot);});
   function render(s){
     if(!s||!s.last)return;
     const v=s.last;
@@ -40,10 +42,14 @@
     $("om-familiarity").textContent=v.familiarity.toFixed(2);
     $("om-error").textContent=v.error.toFixed(3);
     $("om-node").textContent="#"+v.nearest;
-    $("om-horizon").textContent=v.horizon.toUpperCase();
+    $("om-horizon").textContent=v.predictedNode===null?"LEARNING":"PREDICT";
     $("om-budget").textContent=v.used+" / "+v.budget;
-    $("om-memory").textContent="MEM "+s.memory.length+"/24 · PLASTICITY "+(s.settings.plasticity?"ON":"OFF");\n    $("om-synapses").textContent=s.learnedSynapses+"/"+s.synapseCount;\n    $("om-updates").textContent=String(s.updates);\n    $("om-prediction").textContent=v.predictedNode===null?"--":"#"+v.predictedNode+" ("+v.predictionConfidence.toFixed(2)+")";\n    $("om-plasticity").textContent="Plasticidad: "+(s.settings.plasticity?"ON":"OFF");
-    const active=new Set(s.last.topology.filter(t=>t.band==="closest").map(t=>t.id));
+    $("om-memory").textContent="MEM "+s.memory.length+"/24 · PLASTICITY "+(s.settings.plasticity?"ON":"OFF");
+    $("om-synapses").textContent=s.learnedSynapses+"/"+s.synapseCount;
+    $("om-updates").textContent=String(s.updates);
+    $("om-prediction").textContent=v.predictedNode===null?"--":"#"+v.predictedNode+" ("+v.predictionConfidence.toFixed(2)+")";
+    $("om-plasticity").textContent="Plasticidad: "+(s.settings.plasticity?"ON":"OFF");
+    const active=new Set(s.nodes.filter(n=>n.activation>0.25).map(n=>n.id));
     grid.querySelectorAll(".omega-node").forEach(el=>{const n=s.nodes[Number(el.dataset.node)];el.style.opacity=String(.2+n.activation*.8);el.classList.toggle("is-near",active.has(n.id));el.classList.toggle("is-hot",n.id===v.nearest);});
     $("om-tasks").textContent="Admit: "+v.admitted.join(" · ")+" | Deferred: "+(v.deferred.join(" · ")||"none");
   }

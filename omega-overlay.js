@@ -9,12 +9,12 @@
     <section class="omega-panel" aria-label="Omega Neural Browser">
       <header class="omega-head"><div><span class="omega-kicker">KRO-NOS · SNNF</span><strong>Ω NEURAL BROWSER</strong></div><button class="omega-min" title="Minimizar panel">−</button></header>
       <div class="omega-status"><i class="omega-led"></i><span id="om-status">SENSOR WAITING</span><span id="om-tick">T 0</span></div>
-      <div class="omega-focus"><small>ATTENTION TARGET</small><b id="om-target">Sin objetivo</b><div class="omega-metrics"><span>F <b id="om-familiarity">--</b></span><span>ERROR <b id="om-error">--</b></span><span>NODE <b id="om-node">--</b></span></div></div>
+      <div class="omega-focus"><small>ATTENTION TARGET</small><b id="om-target">Sin objetivo</b><div class="omega-metrics"><span>F <b id="om-familiarity">--</b></span><span>ERROR <b id="om-error">--</b></span><span>NODE <b id="om-node">--</b></span></div><div class="omega-metrics"><span>SYN <b id="om-synapses">0/2352</b></span><span>UPDATES <b id="om-updates">0</b></span><span>PRED <b id="om-prediction">--</b></span></div></div>
       <div class="omega-field"><div class="omega-section"><span>OMEGA FIELD · 7×7</span><span id="om-horizon">SOON</span></div><div id="om-grid" class="omega-grid"></div></div>
       <div class="omega-admission"><div class="omega-section"><span>KRO-NOS ADMISSION</span><span id="om-budget">0 / 40</span></div><div id="om-tasks" class="omega-tasks">Esperando estímulos…</div></div>
       <div class="omega-controls">
         <button id="om-pause">Pausar campo</button><button id="om-click" class="omega-safe">Clic ocular: OFF</button>
-        <div class="omega-actions"><button id="om-up">↑ Scroll</button><button id="om-down">↓ Scroll</button><button id="om-focus">Enfocar objetivo</button></div>
+        <div class="omega-actions"><button id="om-up">↑ Scroll</button><button id="om-down">↓ Scroll</button><button id="om-focus">Enfocar objetivo</button></div><div class="omega-actions"><button id="om-plasticity">Plasticidad: ON</button><button id="om-reset">Reset sináptico</button></div>
       </div>
       <footer><span id="om-memory">MEM 0/24 · PLASTICITY ON</span><button id="om-clear">Limpiar memoria</button></footer>
     </section><button class="omega-tab" aria-label="Abrir panel Omega">Ω</button>`;
@@ -30,7 +30,7 @@
   $("om-up").addEventListener("click",()=>window.scrollBy({top:-Math.max(280,innerHeight*.7),behavior:"smooth"}));
   $("om-down").addEventListener("click",()=>window.scrollBy({top:Math.max(280,innerHeight*.7),behavior:"smooth"}));
   $("om-focus").addEventListener("click",()=>{if(!latestTarget||root.contains(latestTarget))return;latestTarget.scrollIntoView({behavior:"smooth",block:"center"});if(latestTarget.matches("a,button,input,textarea,select,[tabindex]"))latestTarget.focus({preventScroll:true});});
-  $("om-clear").addEventListener("click",()=>{snapshot=field.clearMemory();render(snapshot);});
+  $("om-clear").addEventListener("click",()=>{snapshot=field.clearMemory();render(snapshot);});\n  $("om-plasticity").addEventListener("click",e=>{const next=!field.plasticity;snapshot=field.configure({plasticity:next});e.currentTarget.textContent="Plasticidad: "+(next?"ON":"OFF");render(snapshot);});\n  $("om-reset").addEventListener("click",()=>{snapshot=field.resetLearning();render(snapshot);});
   function render(s){
     if(!s||!s.last)return;
     const v=s.last;
@@ -42,7 +42,7 @@
     $("om-node").textContent="#"+v.nearest;
     $("om-horizon").textContent=v.horizon.toUpperCase();
     $("om-budget").textContent=v.used+" / "+v.budget;
-    $("om-memory").textContent="MEM "+s.memory.length+"/24 · PLASTICITY "+(s.settings.plasticity?"ON":"OFF");
+    $("om-memory").textContent="MEM "+s.memory.length+"/24 · PLASTICITY "+(s.settings.plasticity?"ON":"OFF");\n    $("om-synapses").textContent=s.learnedSynapses+"/"+s.synapseCount;\n    $("om-updates").textContent=String(s.updates);\n    $("om-prediction").textContent=v.predictedNode===null?"--":"#"+v.predictedNode+" ("+v.predictionConfidence.toFixed(2)+")";\n    $("om-plasticity").textContent="Plasticidad: "+(s.settings.plasticity?"ON":"OFF");
     const active=new Set(s.last.topology.filter(t=>t.band==="closest").map(t=>t.id));
     grid.querySelectorAll(".omega-node").forEach(el=>{const n=s.nodes[Number(el.dataset.node)];el.style.opacity=String(.2+n.activation*.8);el.classList.toggle("is-near",active.has(n.id));el.classList.toggle("is-hot",n.id===v.nearest);});
     $("om-tasks").textContent="Admit: "+v.admitted.join(" · ")+" | Deferred: "+(v.deferred.join(" · ")||"none");

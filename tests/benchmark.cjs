@@ -34,33 +34,21 @@ function evaluateField(field) {
   return {accuracy:total?hits/total:0,meanNormalizedError:total?error/total:1,predictions:total};
 }
 function frequencyBaseline() {
+  const encoder=new OmegaField({plasticity:false});
+  const ids=cycle.map(item=>encoder.encode(item).winner.id);
   const counts=new Map();
-  for(let r=0;r<trainRepeats;r++) for(let i=0;i<cycle.length;i++) {
-    const from=i, to=(i+1)%cycle.length;
-    counts.set(from+"->"+to,(counts.get(from+"->"+to)||0)+1);
+  for(let r=0;r<trainRepeats;r++) for(let i=0;i<ids.length;i++) {
+    const from=ids[i],to=ids[(i+1)%ids.length];
+    if(!counts.has(from))counts.set(from,new Map());
+    const row=counts.get(from);row.set(to,(row.get(to)||0)+1);
   }
   let hits=0,total=0;
-  for(let r=0;r<evalRepeats;r++) for(let i=0;i<cycle.length;i++) {
-    const predicted=(i+1)%cycle.length;
-    const actual=(i+1)%cycle.length;
-    if(counts.has(i+"->"+predicted)){total++;if(predicted===actual)hits++;}
+  for(let r=0;r<evalRepeats;r++) for(let i=0;i<ids.length;i++) {
+    const row=counts.get(ids[i]);
+    if(!row||row.size===0)continue;
+    const predicted=[...row.entries()].sort((a,b)=>b[1]-a[1])[0][0];
+    total++;
+    if(predicted===ids[(i+1)%ids.length])hits++;
   }
   return {accuracy:total?hits/total:0,predictions:total};
 }
-function run(plasticity) {
-  const field=new OmegaField({budget:100,plasticity,learningRate:0.12});
-  const start=performance.now();
-  train(field);
-  const trainMs=performance.now()-start;
-  const evalStart=performance.now();
-  const metrics=evaluateField(field);
-  const evalMs=performance.now()-evalStart;
-  return {...metrics,trainMs:Number(trainMs.toFixed(3)),evalMs:Number(evalMs.toFixed(3)),
-    learnedSynapses:field.snapshot().learnedSynapses,updates:field.updates};
-}
-console.log(JSON.stringify({
-  protocol:{trainRepeats,evalRepeats,sequence:"A→B→C→A",note:"Synthetic deterministic sanity check; not a browser benchmark."},
-  plasticityOn:run(true),
-  plasticityOff:run(false),
-  frequencyBaseline:frequencyBaseline()
-},null,2));

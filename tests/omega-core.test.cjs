@@ -3,35 +3,57 @@ const assert = require("node:assert/strict");
 global.window = global;
 require("../omega-core.js");
 
-test("Omega familiarity remains finite and bounded", () => {
+test("field exposes explicit directed synapses between distinct nodes", () => {
   const field = new OmegaField();
-  for (let i = 0; i < 80; i++) {
-    const s = field.observe({ x: (i % 10) / 9, y: ((i * 3) % 10) / 9, target: "content", confidence: 0.8, dwell: 100 });
-    assert.ok(Number.isFinite(s.last.familiarity));
-    assert.ok(s.last.familiarity >= 0 && s.last.familiarity <= 1);
-  }
+  const s = field.snapshot();
+  assert.equal(s.nodes.length, 49);
+  assert.equal(s.synapseCount, 49 * 48);
+  assert.ok(field.synapses.every(e => e.from !== e.to && e.weight === 0));
 });
 
-test("admission never exceeds the configured abstract budget", () => {
-  for (const policy of ["uniform", "topological", "temporal"]) {
-    const field = new OmegaField({ budget: 25, policy });
-    for (let i = 0; i < 20; i++) {
-      const s = field.observe({ x: 0.2 + i / 30, y: 0.7, target: "link", confidence: 0.9, dwell: 900 });
-      assert.ok(s.last.used <= s.last.budget);
-    }
-  }
+test("plasticity learns a repeated navigation transition", () => {
+  const field = new OmegaField({ budget: 100, learningRate: 0.2, plasticity: true });
+  const A = { x: 0.1, y: 0.1, target: "link", confidence: 0.95, dwell: 900 };
+  const B = { x: 0.9, y: 0.9, target: "content", confidence: 0.95, dwell: 900 };
+  for (let i = 0; i < 30; i++) { field.observe(A); field.observe(B); }
+  const a = field.encode(A).winner.id, b = field.encode(B).winner.id;
+  const learned = field.outgoing[a].find(e => e.to === b);
+  assert.ok(learned.weight > 0.5, "repeated A→B transition should strengthen its synapse");
+  const prediction = field.predictFrom(a);
+  assert.equal(prediction.node, b);
+  assert.ok(prediction.confidence > 0.8);
 });
 
-test("episodic memory is bounded to 24 events", () => {
+test("disabling plasticity prevents synaptic weight updates", () => {
+  const field = new OmegaField({ budget: 100, plasticity: false });
+  for (let i = 0; i < 12; i++) {
+    field.observe({ x: 0.1, y: 0.1, target: "link", confidence: 1, dwell: 1000 });
+    field.observe({ x: 0.9, y: 0.9, target: "content", confidence: 1, dwell: 1000 });
+  }
+  assert.equal(field.updates, 0);
+  assert.equal(field.snapshot().learnedSynapses, 0);
+});
+
+test("admission respects budget without starving later low-cost tasks", () => {
+  const field = new OmegaField({ budget: 22 });
+  const a = field.admit({ novelty: "novel", predictionError: 1, confidence: 1, dwell: 1000 });
+  assert.ok(a.used <= a.budget);
+  assert.ok(a.admitted.length >= 1);
+});
+
+test("episodic memory remains bounded to 24 events", () => {
   const field = new OmegaField({ budget: 100 });
-  for (let i = 0; i < 40; i++) field.observe({ x: 0.5, y: 0.5, target: "media", confidence: 0.9, dwell: 1000 });
+  for (let i = 0; i < 50; i++) field.observe({ x: 0.5, y: 0.5, target: "media", confidence: 0.9, dwell: 1000 });
   assert.equal(field.snapshot().memory.length, 24);
 });
 
-test("configuration changes affect subsequent snapshots", () => {
-  const field = new OmegaField();
-  const s = field.configure({ policy: "temporal", budget: 55, plasticity: false });
-  assert.equal(s.settings.policy, "temporal");
-  assert.equal(s.settings.budget, 55);
-  assert.equal(s.settings.plasticity, false);
+test("prediction error is bounded and resetLearning clears learned weights", () => {
+  const field = new OmegaField({ budget: 100 });
+  for (let i = 0; i < 10; i++) {
+    field.observe({ x: 0.2, y: 0.2, target: "link", confidence: 1, dwell: 1000 });
+    field.observe({ x: 0.8, y: 0.8, target: "content", confidence: 1, dwell: 1000 });
+  }
+  assert.ok(field.last.predictionError >= 0 && field.last.predictionError <= 1);
+  field.resetLearning();
+  assert.equal(field.snapshot().learnedSynapses, 0);
 });

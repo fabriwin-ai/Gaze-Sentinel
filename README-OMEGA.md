@@ -17,6 +17,7 @@ This is an online associative transition learner with simplified spiking-style s
 Requires Node.js 18+:
 ```sh
 node --test tests/omega-core.test.cjs
+node tests/benchmark.cjs
 ```
 
 ## First benchmark protocol

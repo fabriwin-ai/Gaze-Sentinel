@@ -9,7 +9,6 @@
       this.theta=options.familiarityThreshold ?? 0.68;
       this.eta=options.learningRate ?? 0.12;
       this.budget=options.budget ?? 40;
-      this.policy=options.policy ?? "topological";
       this.plasticity=options.plasticity ?? true;
       this.nodes=Array.from({length:49},(_,id)=>({
         id,x:id%7,y:Math.floor(id/7),membrane:0,activation:0,spikes:0
@@ -114,11 +113,10 @@
     snapshot() {
       return {tick:this.tick,last:this.last,nodes:this.nodes.map(n=>({...n})),
         synapseCount:this.synapses.length,learnedSynapses:this.synapses.filter(s=>s.weight>0.015).length,
-        memory:this.memory.slice(-6),updates:this.updates,
-        settings:{policy:this.policy,budget:this.budget,plasticity:this.plasticity,threshold:this.theta,learningRate:this.eta}};
+        memory:this.memory.slice(),updates:this.updates,
+        settings:{budget:this.budget,plasticity:this.plasticity,threshold:this.theta,learningRate:this.eta}};
     }
     configure(patch={}) {
-      if(patch.policy&&["uniform","topological","temporal"].includes(patch.policy))this.policy=patch.policy;
       if(Number.isFinite(patch.budget))this.budget=clamp(patch.budget,10,100);
       if(typeof patch.plasticity==="boolean")this.plasticity=patch.plasticity;
       if(Number.isFinite(patch.learningRate))this.eta=clamp(patch.learningRate,0.001,0.5);

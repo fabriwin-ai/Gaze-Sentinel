@@ -1,32 +1,29 @@
-# Kro-NOS Omega Neural Browser (experimental)
+# Omega-SNNF Experimental Core v1.2
 
-This branch integrates the existing Gaze-Sentinel camera page with an experimental Omega-SNNF field and a page-level control panel.
+This iteration replaces the first fixed familiarity heuristic with an explicit, inspectable transition-learning field.
 
-## Install
-1. Download this branch as a ZIP and extract it.
-2. Open `chrome://extensions` (or `edge://extensions`).
-3. Enable Developer mode and choose **Load unpacked**.
-4. Select the extracted repository folder.
-5. Click the extension icon to open the existing Gaze-Sentinel camera page and grant camera permission.
-6. On an ordinary HTTP(S) page, the Ω panel appears in the upper-right corner.
+## What is implemented
+- 49 spatial units with decaying membrane state, activation, and spike counters.
+- A directed 49×48 synapse graph. Each edge has a weight, eligibility trace, and update counter.
+- Online transition learning: repeated navigation transitions strengthen source→destination edges; inactive alternatives decay.
+- Prediction from the outgoing learned transition distribution, with normalized spatial prediction error.
+- A task-admission pass that ranks prediction, memory, context, and plasticity work and checks each cost independently against an abstract budget.
+- Bounded episodic event memory and a resetLearning() method for controlled experiments.
 
-## Controls
-- Panel buttons: pause/resume the field, explicitly enable/disable gaze-triggered click events, scroll, focus the current target, and clear episodic memory.
-- `Alt+Shift+O`: toggle the panel.
-- Existing sensor controls remain: 1/2/3 ray profiles, 4/5/6/7 themes, 0 process preview, 9 adaptive resolution.
+## Important scientific boundary
+This is an online associative transition learner with simplified spiking-style state variables. It is **not** a biologically validated spiking neural network, a calibrated eye tracker, or evidence of cognition. The membrane/spike variables are engineering abstractions. Prediction is a weighted distribution over previously learned transitions.
 
-## Architecture
-- `omega-core.js`: 7x7 field, prediction residual, Omega familiarity heuristic, 24-event episodic memory, local plasticity and strict-prefix task admission.
-- `omega-overlay.js`: DOM target classification, attention panel, field visualization and explicit controls.
-- `content-script.js`: existing Gaze-Sentinel cursor and message bridge.
+## Run tests
+Requires Node.js 18+:
+```sh
+node --test tests/omega-core.test.cjs
+```
 
-## Safety and limitations
-- Gaze is treated as attention evidence, not consent. Gaze-triggered clicks are OFF by default and require an explicit toggle in the panel.
-- Scroll, focus and memory-clear actions are explicit panel-button actions.
-- Synthetic mouse events are not trusted user gestures and may not activate protected browser/app interactions.
-- The existing sensor estimates motion from camera frames; it is not calibrated pupil/iris eye tracking.
-- The field is a heuristic proof of concept, not a trained SNN, validated predictive-coding network, production scheduler, seL4 integration or energy-efficiency claim.
-- The extension retains broad host access from the original project because its content overlay must observe page elements. Review permissions before installing.
+## First benchmark protocol
+1. Generate deterministic navigation sequences with repeated transitions and held-out transitions.
+2. Compare plasticity ON against plasticity OFF, using identical sequences.
+3. Record next-node top-1 accuracy, normalized spatial prediction error, learned-synapse count, updates, and runtime.
+4. Repeat with shuffled transitions to detect memorization and leakage.
+5. Do not claim improvement until held-out results beat a frequency baseline across multiple seeds.
 
-## Research status
-This implementation operationalizes the essay's simplified cycle: stimulus -> prediction -> residual -> familiarity -> topology/horizon -> admission -> episodic memory/local update. Costs are abstract units, not measured CPU time or energy. Results must be evaluated against baselines and adversarial/negative cases.
+The budget values are abstract admission units, not CPU time, energy, or memory measurements.
